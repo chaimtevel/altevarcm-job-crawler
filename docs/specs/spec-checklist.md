@@ -93,4 +93,4 @@ How each requirement in `Technical Assessment.pdf` is met. Details are in the ro
 | README: architectural choices | README "Architecture" section has a diagram, project responsibilities and key choices with reasons. |
 | README: known limitations | README "Known limitations" lists auth, robots.txt, rate limiting, re-crawl depth and other gaps. |
 | README: built first, cut, next | README section "What I built first, what I cut, what's next" covers all three. |
-| CI pipeline (optional) | Not built; listed under "Next" in the README as GitHub Actions build and test. |
+| CI pipeline (optional) | `.github/workflows/ci.yml` builds and tests .NET and, in parallel, type-checks and builds the React app. |

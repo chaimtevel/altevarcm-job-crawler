@@ -1,5 +1,7 @@
 # Job-based Web Crawler
 
+[![CI](https://github.com/chaimtevel/altevarcm-job-crawler/actions/workflows/ci.yml/badge.svg)](https://github.com/chaimtevel/altevarcm-job-crawler/actions/workflows/ci.yml)
+
 Submit a crawl job for a URL; a worker crawls it asynchronously through a message broker, results are stored in
 PostgreSQL, and a React UI shows live progress, a tree of discovered pages with each page's **Domain Link Ratio**,
 and job history.
@@ -175,12 +177,12 @@ The UI came after the backend was correct end to end.
 **Cut (and why):**
 - **Authentication / user accounts** – not in the spec's flows or rubric; would have consumed the time budget.
 - **Cancel job** (optional) – the `Canceled` status exists; the endpoint and worker check were lower value.
-- **CI pipeline** (optional), SSE/SignalR (polling is enough), robots.txt and rate limiting.
+- SSE/SignalR (polling is enough), robots.txt and rate limiting.
 
 **Next, with more time:**
 1. Transactional outbox for the API's first publish (today a broker outage marks the job `Failed` with HTTP 503).
 2. Cancel endpoint; per-host politeness (robots.txt, rate limit, concurrency cap).
-3. GitHub Actions build + test; Testcontainers-based tests for `CrawlStore` SQL and the full message flow.
+3. Testcontainers-based tests for `CrawlStore` SQL and the full message flow, run in CI; Docker image builds in CI.
 4. Auth if the system becomes multi-user.
 
 ## Known limitations
