@@ -7,6 +7,8 @@ public class CreateJobValidatorTests
     [Theory]
     [InlineData("https://example.com", "https://example.com/")]
     [InlineData("  HTTP://Example.com/path#frag  ", "http://example.com/path")]
+    [InlineData("example.com", "https://example.com/")]
+    [InlineData("www.example.com/docs", "https://www.example.com/docs")]
     public void Accepts_and_normalizes_http_urls(string url, string expected)
     {
         var (startUrl, errors) = CreateJobValidator.Validate(new CreateJobRequest(url, null));
@@ -18,7 +20,6 @@ public class CreateJobValidatorTests
     [Theory]
     [InlineData(null)]
     [InlineData("")]
-    [InlineData("example.com")]
     [InlineData("/relative/path")]
     [InlineData("ftp://example.com")]
     [InlineData("mailto:a@example.com")]

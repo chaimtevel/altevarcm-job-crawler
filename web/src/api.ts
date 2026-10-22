@@ -1,3 +1,4 @@
+import type { MouseEvent } from 'react';
 import { format, formatDuration as formatDurationText, intervalToDuration } from 'date-fns';
 
 // Mirror the API's CrawlJob limits; the API validates and enforces them.
@@ -69,6 +70,7 @@ export interface PageLink {
   url: string;
   isInternal: boolean;
   status: PageStatus;
+  statusReason: string | null;
 }
 
 /** Error with the API's validation messages (ProblemDetails "errors"), if any. */
@@ -86,7 +88,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const problem = await response.json().catch(() => null);
-    throw new ApiError(problem?.title ?? `Request failed (${response.status})`, response.status, problem?.errors ?? {});
+    const message = problem?.detail ?? problem?.title ?? `Request failed (${response.status})`;
+    throw new ApiError(message, response.status, problem?.errors ?? {});
   }
 
   return response.json() as Promise<T>;
@@ -103,6 +106,13 @@ export const api = {
 };
 
 export const isActive = (status: JobStatus | undefined) => status === 'Pending' || status === 'Running';
+
+/** Poll a job list while any of its jobs is still running. */
+export const pollWhileAnyActive = (jobs: JobSummary[] | undefined) =>
+  jobs?.some((job) => isActive(job.status)) ? 5000 : false;
+
+/** Lets a row stay clickable while Ctrl/middle-click on its link opens a new tab. */
+export const isLinkClick = (event: MouseEvent) => (event.target as HTMLElement).closest('a') !== null;
 
 export const formatDate = (value: string | null) => (value ? format(value, 'PPpp') : '—');
 

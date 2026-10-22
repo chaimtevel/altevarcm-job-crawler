@@ -88,7 +88,9 @@ export function JobDetailsPage() {
         >
           <Typography.Paragraph type="secondary">
             <b>Domain Link Ratio</b> = links that stay on the starting site ÷ all links on the page (1.00 = all internal).
-            Expand a row to see the pages it led to; click "links" to see every outgoing link.
+            Expand a row to see the pages it led to; click "links" to see every outgoing link. The tree lists
+            fetched pages only: links skipped without a fetch (external, too deep, over the page limit) appear in
+            each page's links, with the reason.
           </Typography.Paragraph>
           {tree.isPending && <Loading label="Loading pages…" />}
           {tree.isError && <ErrorMessage error={tree.error} />}

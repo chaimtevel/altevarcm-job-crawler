@@ -141,7 +141,9 @@ than 15 minutes → `Failed: Timed out after 15 minutes`), so no job stays `Runn
 - **HTML only** (`text/html`, `application/xhtml+xml`, case-insensitive), max 5 MB.
 - **Redirects** are followed by `PageFetcher` itself (auto-redirect off), max 5 hops in total, including
   `https → http`, which `HttpClient` would refuse but some sites use (e.g. quotes.toscrape.com). The page is crawled
-  as its final URL; a redirect isn't a depth level. Loops end as `Failed: Too many redirects`.
+  as its final URL; a redirect isn't a depth level. Loops end as `Failed: Too many redirects`. The final URL is
+  stored as `Skipped: Same page as …`, so links to it (e.g. `example.com` → `www.example.com/`) aren't crawled twice.
+- **Input URL:** a missing scheme defaults to `https://` (`example.com` → `https://example.com/`).
 - **SSRF guard:** loopback, private, link-local (incl. cloud metadata) and reserved addresses are rejected at the
   API and blocked at connect time in the worker, which also covers DNS names and redirects.
 - **Job deadline:** 15 minutes (also the message TTL).

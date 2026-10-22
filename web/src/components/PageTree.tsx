@@ -99,6 +99,7 @@ function OutgoingLinks({ jobId, pageId }: { jobId: string; pageId: number }) {
           <Tag color={link.isInternal ? 'green' : 'orange'}>{link.isInternal ? 'internal' : 'external'}</Tag>
           <a href={link.url} target="_blank" rel="noreferrer" className="grow">{link.url}</a>
           <StatusBadge status={link.status} />
+          {link.statusReason && <Typography.Text type="secondary" className="reason">{link.statusReason}</Typography.Text>}
         </List.Item>
       )}
     />

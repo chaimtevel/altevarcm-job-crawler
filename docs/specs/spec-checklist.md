@@ -35,7 +35,7 @@ How each requirement in `Technical Assessment.pdf` is met. Details are in the ro
 | Collect absolute URL, outgoing links, ratio | Each page stores its absolute URL, ratio and link count; `page_links` rows list its outgoing links. |
 | Relative links | AngleSharp resolves links against the page URL, honouring `<base href>`; covered by unit and fixture tests. |
 | Anchor links (ignore fragment) | `UrlNormalizer` drops fragments, so `page#top` and `page` normalize to the same URL. |
-| No reprocessing of duplicate URLs | A unique index on `(job_id, url)` plus upserts ensures each normalized URL is crawled once per job. |
+| No reprocessing of duplicate URLs | Unique `(job_id, url)` index and upserts crawl each normalized URL once; redirect targets are recorded too. |
 | Max pages per job | 200 pages per job, reserved atomically under a job-row lock; extra links stored as `Page limit reached`. |
 | HTTP timeouts and retries | Polly pipeline: 10 s per attempt, 2 retries with exponential backoff and jitter, 30 s total. |
 

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Alert, Button, Card, Form, Input, InputNumber, List, Typography } from 'antd';
-import { api, ApiError, DEFAULT_MAX_DEPTH, formatDate, MAX_DEPTH, MAX_PAGES } from '../api';
+import { api, ApiError, DEFAULT_MAX_DEPTH, formatDate, isLinkClick, MAX_DEPTH, MAX_PAGES, pollWhileAnyActive } from '../api';
 import { StatusBadge } from '../components/StatusBadge';
 
 export function StartCrawlPage() {
@@ -15,7 +15,11 @@ export function StartCrawlPage() {
     onSuccess: ({ jobId }) => navigate(`/jobs/${jobId}`),
   });
 
-  const recent = useQuery({ queryKey: ['jobs', 'recent'], queryFn: () => api.listJobs(1, 5) });
+  const recent = useQuery({
+    queryKey: ['jobs', 'recent'],
+    queryFn: () => api.listJobs(1, 5),
+    refetchInterval: (query) => pollWhileAnyActive(query.state.data?.items),
+  });
 
   const fieldErrors = createJob.error instanceof ApiError ? createJob.error.fieldErrors : {};
   const urlError = fieldErrors.url?.join(' ');
@@ -37,12 +41,18 @@ export function StartCrawlPage() {
                 size="large"
                 placeholder="https://example.com"
                 value={url}
-                onChange={(e) => setUrl(e.target.value)}
+                onChange={(e) => {
+                  setUrl(e.target.value);
+                  createJob.reset();
+                }}
                 autoFocus
               />
             </Form.Item>
             <Form.Item label="Max depth" validateStatus={depthError ? 'error' : undefined} help={depthError}>
-              <InputNumber size="large" min={0} max={MAX_DEPTH} placeholder={String(DEFAULT_MAX_DEPTH)} value={maxDepth} onChange={setMaxDepth} />
+              <InputNumber size="large" min={0} max={MAX_DEPTH} placeholder={String(DEFAULT_MAX_DEPTH)} value={maxDepth} onChange={(value) => {
+                setMaxDepth(value);
+                createJob.reset();
+              }} />
             </Form.Item>
             <Form.Item label=" ">
               <Button type="primary" size="large" htmlType="submit" loading={createJob.isPending} disabled={!url.trim()}>
@@ -63,8 +73,12 @@ export function StartCrawlPage() {
           dataSource={recent.data?.items ?? []}
           locale={{ emptyText: 'No crawls yet — start one above.' }}
           renderItem={(job) => (
-            <List.Item className="clickable" onClick={() => navigate(`/jobs/${job.jobId}`)} extra={<StatusBadge status={job.status} />}>
-              <List.Item.Meta title={job.url} description={formatDate(job.createdAt)} />
+            <List.Item
+              className="clickable"
+              onClick={(event) => !isLinkClick(event) && navigate(`/jobs/${job.jobId}`)}
+              extra={<StatusBadge status={job.status} />}
+            >
+              <List.Item.Meta title={<Link to={`/jobs/${job.jobId}`}>{job.url}</Link>} description={formatDate(job.createdAt)} />
             </List.Item>
           )}
         />

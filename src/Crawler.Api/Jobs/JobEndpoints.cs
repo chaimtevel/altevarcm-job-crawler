@@ -180,7 +180,7 @@ public static class JobEndpoints
             .Where(l => l.JobId == jobId && l.ParentPageId == pageId)
             .Join(db.Pages, l => l.ChildPageId, p => p.Id, (l, p) => p)
             .OrderBy(p => p.Id)
-            .Select(p => new PageLinkResponse(p.Id, p.Url, p.IsInternal, p.Status))
+            .Select(p => new PageLinkResponse(p.Id, p.Url, p.IsInternal, p.Status, p.StatusReason))
             .ToListAsync(ct);
 
         return TypedResults.Ok(links);

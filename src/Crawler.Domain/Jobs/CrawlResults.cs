@@ -24,4 +24,7 @@ public static class SkipReasons
     public const string External = "External link";
     public const string BeyondMaxDepth = "Beyond max depth";
     public const string PageLimitReached = "Page limit reached";
+
+    /// <summary>A redirect target already crawled under the URL that redirected to it.</summary>
+    public static string SamePageAs(string url) => $"Same page as {url}";
 }

@@ -78,6 +78,7 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
         CrawlPage page,
         PageOutcome outcome,
         IReadOnlyList<DiscoveredLink> links,
+        DiscoveredLink? redirectTarget,
         CancellationToken ct)
     {
         var childDepth = page.Depth + 1;
@@ -95,6 +96,11 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
             {
                 // Job was deleted meanwhile; nothing to save.
                 return (IReadOnlyList<QueuedPage>)[];
+            }
+
+            if (redirectTarget is not null)
+            {
+                await MarkRedirectTargetAsync(job.Id, page, redirectTarget, now, ct);
             }
 
             var knownUrls = await GetSlottedUrlsAsync(job.Id, links, childDepth, ct);
@@ -166,6 +172,22 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
             return timedOut;
         });
     }
+
+    /// <summary>
+    /// Records the redirect target as this page, so links to it are known and never crawled.
+    /// An unclaimed Pending or beyond-depth row for it is turned into the same marker.
+    /// </summary>
+    private Task MarkRedirectTargetAsync(
+        Guid jobId, CrawlPage page, DiscoveredLink target, DateTimeOffset now, CancellationToken ct) =>
+        db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO crawl_pages AS p (job_id, url, depth, discovered_by_page_id, is_internal, status, status_reason, discovered_at)
+            VALUES ({jobId}, {target.Url}, {page.Depth}, {page.Id}, {target.IsInternal}, {target.Status.ToString()}, {target.StatusReason}, {now})
+            ON CONFLICT (job_id, url) DO UPDATE SET
+                status = EXCLUDED.status,
+                status_reason = EXCLUDED.status_reason
+            WHERE (p.status = 'Pending' AND p.claimed_at IS NULL)
+               OR (p.status = 'Skipped' AND p.status_reason = {SkipReasons.BeyondMaxDepth})
+            """, ct);
 
     /// <summary>Known URLs that need no new slot; a beyond-depth row reachable at a shallower depth needs one.</summary>
     private async Task<IReadOnlySet<string>> GetSlottedUrlsAsync(

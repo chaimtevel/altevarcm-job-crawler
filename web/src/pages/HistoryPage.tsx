@@ -1,17 +1,15 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Card, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { api, formatDate, formatDuration, isActive, type JobSummary } from '../api';
+import { api, formatDate, formatDuration, isLinkClick, pollWhileAnyActive, type JobSummary } from '../api';
 import { StatusBadge } from '../components/StatusBadge';
 import { ErrorMessage } from '../components/States';
 
 const PAGE_SIZE = 20;
-const POLL_INTERVAL_MS = 5000;
 
 const columns: ColumnsType<JobSummary> = [
-  { title: 'URL', dataIndex: 'url', render: (url: string) => <Typography.Text strong>{url}</Typography.Text> },
+  { title: 'URL', dataIndex: 'url', render: (url: string, job) => <Link to={`/jobs/${job.jobId}`}><Typography.Text strong>{url}</Typography.Text></Link> },
   { title: 'Status', dataIndex: 'status', width: 120, render: (status) => <StatusBadge status={status} /> },
   { title: 'Created', dataIndex: 'createdAt', width: 200, render: (value: string) => <Typography.Text type="secondary">{formatDate(value)}</Typography.Text> },
   { title: 'Duration', key: 'duration', width: 110, render: (_, job) => formatDuration(job.startedAt, job.completedAt) },
@@ -19,14 +17,15 @@ const columns: ColumnsType<JobSummary> = [
 
 export function HistoryPage() {
   const navigate = useNavigate();
-  const [page, setPage] = useState(1);
+  // The page lives in the URL (?page=3) so Back from a job returns to it.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const page = Math.max(1, Number(searchParams.get('page')) || 1);
 
   const jobs = useQuery({
     queryKey: ['jobs', page],
     queryFn: () => api.listJobs(page, PAGE_SIZE),
     placeholderData: keepPreviousData,
-    // Poll only while a job on this page is still running.
-    refetchInterval: (query) => (query.state.data?.items.some((job) => isActive(job.status)) ? POLL_INTERVAL_MS : false),
+    refetchInterval: (query) => pollWhileAnyActive(query.state.data?.items),
   });
 
   if (jobs.isError) {
@@ -42,12 +41,12 @@ export function HistoryPage() {
         loading={jobs.isPending}
         locale={{ emptyText: 'No crawls yet.' }}
         rowClassName="clickable"
-        onRow={(job) => ({ onClick: () => navigate(`/jobs/${job.jobId}`) })}
+        onRow={(job) => ({ onClick: (event) => !isLinkClick(event) && navigate(`/jobs/${job.jobId}`) })}
         pagination={{
           current: page,
           pageSize: PAGE_SIZE,
           total: jobs.data?.totalCount ?? 0,
-          onChange: setPage,
+          onChange: (next) => setSearchParams({ page: String(next) }),
           showTotal: (total) => `${total} jobs`,
         }}
       />

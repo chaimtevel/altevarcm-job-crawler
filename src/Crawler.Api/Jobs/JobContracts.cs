@@ -32,4 +32,4 @@ public record PagedResponse<T>(IReadOnlyList<T> Items, int Page, int PageSize, i
 
 public record JobTreeResponse(Guid JobId, CrawlJobStatus Status, JobTreeNode? Root);
 
-public record PageLinkResponse(long PageId, string Url, bool IsInternal, CrawlPageStatus Status);
+public record PageLinkResponse(long PageId, string Url, bool IsInternal, CrawlPageStatus Status, string? StatusReason);

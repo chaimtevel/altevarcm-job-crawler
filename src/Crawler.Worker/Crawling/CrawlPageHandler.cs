@@ -72,8 +72,8 @@ public class CrawlPageHandler(
         {
             await store.MarkJobRunningAsync(job.Id, ct);
 
-            var (outcome, links) = await CrawlAsync(job, page, ct);
-            var children = await store.SaveResultAsync(job, page, outcome, links, ct);
+            var (outcome, links, redirectTarget) = await CrawlAsync(job, page, ct);
+            var children = await store.SaveResultAsync(job, page, outcome, links, redirectTarget, ct);
 
             logger.LogInformation(
                 "Page {Url} at depth {Depth}: {Status}, {LinkCount} links, ratio {Ratio}",
@@ -88,7 +88,7 @@ public class CrawlPageHandler(
         }
     }
 
-    private async Task<(PageOutcome Outcome, IReadOnlyList<DiscoveredLink> Links)> CrawlAsync(
+    private async Task<(PageOutcome Outcome, IReadOnlyList<DiscoveredLink> Links, DiscoveredLink? RedirectTarget)> CrawlAsync(
         CrawlJob job, CrawlPage page, CancellationToken ct)
     {
         var fetch = await fetcher.FetchAsync(new Uri(page.Url), ct);
@@ -96,15 +96,28 @@ public class CrawlPageHandler(
         if (fetch.Status != FetchStatus.Html)
         {
             var status = fetch.Status == FetchStatus.NotHtml ? CrawlPageStatus.Skipped : CrawlPageStatus.Failed;
-            return (new PageOutcome(status, fetch.HttpStatusCode, null, null, fetch.Reason), []);
+            return (new PageOutcome(status, fetch.HttpStatusCode, null, null, fetch.Reason), [], null);
         }
 
         var startHost = new Uri(job.Url).Host;
         var urls = HtmlLinkExtractor.ExtractLinks(fetch.Html!, fetch.FinalUrl!);
         var ratio = DomainLinkRatio.Calculate(urls, startHost);
         var links = urls.Select(url => Classify(url, startHost, page.Depth + 1, job.MaxDepth)).ToList();
+        var outcome = new PageOutcome(CrawlPageStatus.Crawled, fetch.HttpStatusCode, ratio, urls.Count, null);
 
-        return (new PageOutcome(CrawlPageStatus.Crawled, fetch.HttpStatusCode, ratio, urls.Count, null), links);
+        return (outcome, links, RedirectTarget(page, fetch.FinalUrl!, startHost));
+    }
+
+    /// <summary>After a redirect, the final URL is marked as this page so links to it aren't crawled again.</summary>
+    private static DiscoveredLink? RedirectTarget(CrawlPage page, Uri finalUrl, string startHost)
+    {
+        if (!UrlNormalizer.TryNormalize(finalUrl.AbsoluteUri, finalUrl, out var target) || target.AbsoluteUri == page.Url)
+        {
+            return null;
+        }
+
+        var isInternal = DomainLinkRatio.IsWithinDomain(target.Host, startHost);
+        return new(target.AbsoluteUri, isInternal, CrawlPageStatus.Skipped, SkipReasons.SamePageAs(page.Url));
     }
 
     /// <summary>Internal links within max depth are Pending; the store then applies the page limit.</summary>

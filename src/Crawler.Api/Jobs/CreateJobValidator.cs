@@ -15,9 +15,9 @@ public static class CreateJobValidator
         {
             errors["url"] = ["URL is required."];
         }
-        else if (!Uri.TryCreate(request.Url.Trim(), UriKind.Absolute, out var parsed)
+        else if (!Uri.TryCreate(WithDefaultScheme(request.Url.Trim()), UriKind.Absolute, out var parsed)
                  || !UrlNormalizer.IsHttp(parsed)
-                 || !UrlNormalizer.TryNormalize(request.Url, parsed, out startUrl))
+                 || !UrlNormalizer.TryNormalize(parsed.AbsoluteUri, parsed, out startUrl))
         {
             errors["url"] = ["URL must be an absolute http or https address, e.g. https://example.com."];
         }
@@ -34,4 +34,8 @@ public static class CreateJobValidator
 
         return (errors.Count == 0 ? startUrl : null, errors);
     }
+
+    /// <summary>"example.com/path" becomes https://…; anything with a scheme or a leading slash is left alone.</summary>
+    private static string WithDefaultScheme(string url) =>
+        url.Contains(':') || url.StartsWith('/') ? url : $"https://{url}";
 }
