@@ -8,6 +8,7 @@ import { StatusBadge } from '../components/StatusBadge';
 import { ErrorMessage } from '../components/States';
 
 const PAGE_SIZE = 20;
+const MAX_PAGE = 100_000;
 
 const columns: ColumnsType<JobSummary> = [
   { title: 'URL', dataIndex: 'url', render: (url: string, job) => <Link to={`/jobs/${job.jobId}`}><Typography.Text strong>{url}</Typography.Text></Link> },
@@ -20,7 +21,8 @@ export function HistoryPage() {
   const navigate = useNavigate();
   // The page lives in the URL (?page=3) so Back from a job returns to it.
   const [searchParams, setSearchParams] = useSearchParams();
-  const page = Math.max(1, Math.floor(Number(searchParams.get('page'))) || 1);
+  // Clamped to the API's accepted range, so a hand-edited ?page= can't trigger a 400.
+  const page = Math.min(MAX_PAGE, Math.max(1, Math.floor(Number(searchParams.get('page'))) || 1));
   const search = searchParams.get('q') ?? '';
 
   // Controlled box, synced from ?q= (Back, menu link) without remounting, so it keeps focus.

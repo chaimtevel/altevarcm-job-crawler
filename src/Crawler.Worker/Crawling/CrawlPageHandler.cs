@@ -85,7 +85,10 @@ public class CrawlPageHandler(
             logger.LogInformation(
                 "Page {Url} at depth {Depth}: {Status}, {LinkCount} links, {SitemapCount} sitemap URLs, ratio {Ratio}",
                 page.Url, page.Depth, outcome.Status, outcome.OutgoingLinkCount, result.SitemapLinks.Count, outcome.DomainLinkRatio);
-            return children;
+
+            // Read from the database rather than trusting the insert's RETURNING rows: if a retried
+            // commit re-ran the save, those rows are empty, but the unsent children are still recorded.
+            return await store.GetUnenqueuedChildrenAsync(page.Id, ct);
         }
         catch
         {

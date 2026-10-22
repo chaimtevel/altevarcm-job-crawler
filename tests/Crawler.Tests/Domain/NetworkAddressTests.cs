@@ -18,6 +18,11 @@ public class NetworkAddressTests
     [InlineData("::1")]
     [InlineData("::")]
     [InlineData("fe80::1")]
+    [InlineData("192.0.0.8")]
+    [InlineData("198.18.0.1")]
+    [InlineData("2002:a00:1::1")]          // 6to4 wrapping 10.0.0.1
+    [InlineData("64:ff9b::a00:1")]         // NAT64 wrapping 10.0.0.1
+    [InlineData("::a00:1")]                // IPv4-compatible 10.0.0.1
     [InlineData("fd00::1")]
     [InlineData("::ffff:10.0.0.1")]
     public void Private_and_reserved_addresses_are_not_public(string ip)

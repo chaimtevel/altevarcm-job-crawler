@@ -53,6 +53,16 @@ public class SitemapReaderTests
         Assert.Equal(["https://example.com/wp-sitemap-posts-job-1.xml"], sitemaps.Select(u => u.AbsoluteUri));
     }
 
+    [Fact]
+    public void Byte_order_mark_is_ignored_in_sitemaps_and_robots()
+    {
+        var (pages, _) = SitemapReader.Parse("﻿<urlset><url><loc>https://example.com/a</loc></url></urlset>");
+        var sitemaps = SitemapReader.ParseRobots("﻿Sitemap: https://example.com/sitemap.xml");
+
+        Assert.Equal(["https://example.com/a"], pages.Select(u => u.AbsoluteUri));
+        Assert.Equal(["https://example.com/sitemap.xml"], sitemaps.Select(u => u.AbsoluteUri));
+    }
+
     [Theory]
     [InlineData("<html><body>Not found</body>")]
     [InlineData("""<!DOCTYPE urlset [<!ENTITY x "boom">]><urlset><url><loc>&x;</loc></url></urlset>""")]

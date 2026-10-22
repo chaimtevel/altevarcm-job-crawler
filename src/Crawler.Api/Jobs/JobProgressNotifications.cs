@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Threading.Channels;
 using Crawler.Infrastructure.Persistence;
 using Npgsql;
@@ -8,34 +7,51 @@ namespace Crawler.Api.Jobs;
 /// <summary>Fans out "job changed" signals from Postgres to the SSE streams watching that job.</summary>
 public class JobProgressNotifications
 {
-    private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<Channel<bool>, byte>> _watchers = new();
+    // One lock keeps subscribe, unsubscribe and publish consistent; all three are tiny in-memory operations.
+    private readonly object _gate = new();
+    private readonly Dictionary<Guid, HashSet<Channel<bool>>> _watchers = new();
 
     /// <summary>A signal per change; bursts collapse into one pending signal, so slow streams never back up.</summary>
     public Subscription Subscribe(Guid jobId)
     {
         var channel = Channel.CreateBounded<bool>(new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite });
-        _watchers.GetOrAdd(jobId, _ => new()).TryAdd(channel, 0);
+        lock (_gate)
+        {
+            if (!_watchers.TryGetValue(jobId, out var channels))
+            {
+                _watchers[jobId] = channels = [];
+            }
+
+            channels.Add(channel);
+        }
+
         return new Subscription(channel.Reader, () => Unsubscribe(jobId, channel));
     }
 
     public void Publish(Guid jobId)
     {
-        if (!_watchers.TryGetValue(jobId, out var channels))
+        lock (_gate)
         {
-            return;
-        }
+            if (!_watchers.TryGetValue(jobId, out var channels))
+            {
+                return;
+            }
 
-        foreach (var channel in channels.Keys)
-        {
-            channel.Writer.TryWrite(true);
+            foreach (var channel in channels)
+            {
+                channel.Writer.TryWrite(true);
+            }
         }
     }
 
     private void Unsubscribe(Guid jobId, Channel<bool> channel)
     {
-        if (_watchers.TryGetValue(jobId, out var channels) && channels.TryRemove(channel, out _) && channels.IsEmpty)
+        lock (_gate)
         {
-            _watchers.TryRemove(new KeyValuePair<Guid, ConcurrentDictionary<Channel<bool>, byte>>(jobId, channels));
+            if (_watchers.TryGetValue(jobId, out var channels) && channels.Remove(channel) && channels.Count == 0)
+            {
+                _watchers.Remove(jobId);
+            }
         }
     }
 

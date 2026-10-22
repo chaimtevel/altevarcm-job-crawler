@@ -249,9 +249,18 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
     /// Records the redirect target as this page, so links to it are known and never crawled.
     /// An unclaimed Pending or beyond-depth row for it is turned into the same marker.
     /// </summary>
-    private Task MarkRedirectTargetAsync(
-        Guid jobId, CrawlPage page, DiscoveredLink target, DateTimeOffset now, CancellationToken ct) =>
-        db.Database.ExecuteSqlInterpolatedAsync($"""
+    private async Task MarkRedirectTargetAsync(
+        Guid jobId, CrawlPage page, DiscoveredLink target, DateTimeOffset now, CancellationToken ct)
+    {
+        // A Pending row about to become a marker held a page-limit slot; give it back (caller holds the job lock).
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE crawl_jobs SET reserved_page_count = reserved_page_count - 1
+            WHERE id = {jobId} AND EXISTS (
+                SELECT 1 FROM crawl_pages
+                WHERE job_id = {jobId} AND url = {target.Url} AND status = 'Pending' AND claimed_at IS NULL)
+            """, ct);
+
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
             INSERT INTO crawl_pages AS p (job_id, url, depth, discovered_by_page_id, is_internal, status, status_reason, discovered_at)
             VALUES ({jobId}, {target.Url}, {page.Depth}, {page.Id}, {target.IsInternal}, {target.Status.ToString()}, {StatusReasons.Fit(target.StatusReason)}, {now})
             ON CONFLICT (job_id, url) DO UPDATE SET
@@ -260,6 +269,7 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
             WHERE (p.status = 'Pending' AND p.claimed_at IS NULL)
                OR (p.status = 'Skipped' AND p.status_reason = {SkipReasons.BeyondMaxDepth})
             """, ct);
+    }
 
     /// <summary>Known URLs that need no new slot; a beyond-depth row reachable at a shallower depth needs one.</summary>
     private async Task<IReadOnlySet<string>> GetSlottedUrlsAsync(

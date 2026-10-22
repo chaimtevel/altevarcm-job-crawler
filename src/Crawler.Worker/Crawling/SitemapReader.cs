@@ -66,7 +66,7 @@ public class SitemapReader(PageFetcher fetcher, ILogger<SitemapReader> logger)
     /// <summary>Absolute http(s) URLs from robots.txt "Sitemap:" lines.</summary>
     public static IReadOnlyList<Uri> ParseRobots(string robotsTxt) =>
         robotsTxt.Split('\n')
-            .Select(line => line.Trim())
+            .Select(line => line.Trim().TrimStart('﻿'))
             .Where(line => line.StartsWith("sitemap:", StringComparison.OrdinalIgnoreCase))
             .Select(line => line["sitemap:".Length..].Trim())
             .Select(value => Uri.TryCreate(value, UriKind.Absolute, out var url) ? url : null)
@@ -84,7 +84,8 @@ public class SitemapReader(PageFetcher fetcher, ILogger<SitemapReader> logger)
         try
         {
             var settings = new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null };
-            using var reader = XmlReader.Create(new StringReader(xml), settings);
+            // A UTF-8 byte-order mark survives decoding and would make the XML reader reject the file.
+            using var reader = XmlReader.Create(new StringReader(xml.TrimStart('﻿')), settings);
             document = XDocument.Load(reader);
         }
         catch (XmlException)
