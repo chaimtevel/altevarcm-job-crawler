@@ -17,9 +17,9 @@ builder.Services.AddHealthChecks()
     .AddDbContextCheck<CrawlerDbContext>("postgres")
     .AddDapr();
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddScoped<CrawlStore>();
 builder.Services.AddScoped<CrawlPagePublisher>();
 builder.Services.AddScoped<CrawlPageHandler>();
+builder.Services.AddScoped<SitemapReader>();
 builder.Services.AddHostedService<JobTimeoutService>();
 
 // Message endpoints accept only calls carrying the sidecar's APP_API_TOKEN.

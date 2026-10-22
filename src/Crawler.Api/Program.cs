@@ -12,7 +12,6 @@ builder.Services.AddCrawlerPersistence(builder.Configuration);
 // Publishes through the Dapr sidecar at DAPR_HTTP_ENDPOINT/DAPR_GRPC_ENDPOINT (localhost when unset).
 builder.Services.AddDaprClient();
 builder.Services.AddScoped<CrawlPagePublisher>();
-builder.Services.AddScoped<CrawlStore>();
 builder.Services.AddHealthChecks()
     .AddDbContextCheck<CrawlerDbContext>("postgres")
     .AddDapr();

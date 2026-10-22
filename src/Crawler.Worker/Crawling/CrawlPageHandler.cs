@@ -9,6 +9,7 @@ namespace Crawler.Worker.Crawling;
 public class CrawlPageHandler(
     CrawlStore store,
     PageFetcher fetcher,
+    SitemapReader sitemapReader,
     CrawlPagePublisher publisher,
     TimeProvider clock,
     ILogger<CrawlPageHandler> logger)
@@ -31,7 +32,7 @@ public class CrawlPageHandler(
             return;
         }
 
-        if (job.Status is CrawlJobStatus.Completed or CrawlJobStatus.Failed or CrawlJobStatus.Canceled)
+        if (!job.Status.IsActive())
         {
             logger.LogInformation("Job is {Status}; skipping page {Url}", job.Status, page.Url);
             return;
@@ -72,12 +73,18 @@ public class CrawlPageHandler(
         {
             await store.MarkJobRunningAsync(job.Id, ct);
 
-            var (outcome, links, redirectTarget) = await CrawlAsync(job, page, ct);
-            var children = await store.SaveResultAsync(job, page, outcome, links, redirectTarget, ct);
+            var result = await CrawlAsync(job, page, ct);
+            var children = await store.SaveResultAsync(job, page, result, ct);
+            if (children is null)
+            {
+                logger.LogInformation("Job finished while page {Url} was fetched; result discarded", page.Url);
+                return [];
+            }
 
+            var outcome = result.Outcome;
             logger.LogInformation(
-                "Page {Url} at depth {Depth}: {Status}, {LinkCount} links, ratio {Ratio}",
-                page.Url, page.Depth, outcome.Status, outcome.OutgoingLinkCount, outcome.DomainLinkRatio);
+                "Page {Url} at depth {Depth}: {Status}, {LinkCount} links, {SitemapCount} sitemap URLs, ratio {Ratio}",
+                page.Url, page.Depth, outcome.Status, outcome.OutgoingLinkCount, result.SitemapLinks.Count, outcome.DomainLinkRatio);
             return children;
         }
         catch
@@ -88,24 +95,20 @@ public class CrawlPageHandler(
         }
     }
 
-    private async Task<(PageOutcome Outcome, IReadOnlyList<DiscoveredLink> Links, DiscoveredLink? RedirectTarget)> CrawlAsync(
-        CrawlJob job, CrawlPage page, CancellationToken ct)
+    private async Task<PageResult> CrawlAsync(CrawlJob job, CrawlPage page, CancellationToken ct)
     {
         var fetch = await fetcher.FetchAsync(new Uri(page.Url), ct);
 
         if (fetch.Status != FetchStatus.Html)
         {
             var status = fetch.Status == FetchStatus.NotHtml ? CrawlPageStatus.Skipped : CrawlPageStatus.Failed;
-            return (new PageOutcome(status, fetch.HttpStatusCode, null, null, fetch.Reason), [], null);
+            return PageResult.Without(new PageOutcome(status, fetch.HttpStatusCode, null, null, fetch.Reason));
         }
 
         var startHost = new Uri(job.Url).Host;
-        if (!DomainLinkRatio.IsWithinDomain(fetch.FinalUrl!.Host, startHost))
+        if (OffSiteRedirect(page.Depth, fetch.FinalUrl!, startHost, fetch.HttpStatusCode) is { } offSite)
         {
-            // e.g. /login → an outside auth service: not part of this site, so no ratio or links.
-            var reason = $"Redirects off-site to {fetch.FinalUrl}";
-            var status = page.Depth == 0 ? CrawlPageStatus.Failed : CrawlPageStatus.Skipped;
-            return (new PageOutcome(status, fetch.HttpStatusCode, null, null, reason), [], null);
+            return PageResult.Without(offSite);
         }
 
         var urls = HtmlLinkExtractor.ExtractLinks(fetch.Html!, fetch.FinalUrl!);
@@ -113,7 +116,45 @@ public class CrawlPageHandler(
         var links = urls.Select(url => Classify(url, startHost, page.Depth + 1, job.MaxDepth)).ToList();
         var outcome = new PageOutcome(CrawlPageStatus.Crawled, fetch.HttpStatusCode, ratio, urls.Count, null);
 
-        return (outcome, links, RedirectTarget(page, fetch.FinalUrl!, startHost));
+        // Sitemaps are read once per job, from the start page, and queued alongside its links.
+        var sitemapLinks = page.Depth == 0
+            ? await ReadSitemapLinksAsync(job, page, fetch.FinalUrl!, links, startHost, ct)
+            : [];
+
+        return new PageResult(outcome, links, sitemapLinks, RedirectTarget(page, fetch.FinalUrl!, startHost));
+    }
+
+    /// <summary>
+    /// Same-site sitemap URLs not already linked from the start page, at depth 1 like its links.
+    /// Only crawlable ones are kept, so a huge sitemap can't flood the job with Skipped rows.
+    /// </summary>
+    private async Task<IReadOnlyList<DiscoveredLink>> ReadSitemapLinksAsync(
+        CrawlJob job, CrawlPage page, Uri finalUrl, IReadOnlyList<DiscoveredLink> links, string startHost, CancellationToken ct)
+    {
+        var known = links.Select(l => l.Url).Append(page.Url).Append(finalUrl.AbsoluteUri).ToHashSet();
+        var sitemapUrls = await sitemapReader.ReadAsync(finalUrl, ct);
+
+        return sitemapUrls
+            .Select(url => UrlNormalizer.TryNormalize(url.AbsoluteUri, url, out var normalized) ? normalized : null)
+            .OfType<Uri>()
+            .Where(url => DomainLinkRatio.IsWithinDomain(url.Host, startHost))
+            .Select(url => Classify(url, startHost, page.Depth + 1, job.MaxDepth))
+            .Where(link => link.Status == CrawlPageStatus.Pending && known.Add(link.Url))
+            .ToList();
+    }
+
+    /// <summary>
+    /// A link that redirects off-site (e.g. /login → an auth service) is Skipped with no ratio or links.
+    /// The start page is crawled wherever it lands; the starting domain stays the job URL's host.
+    /// </summary>
+    public static PageOutcome? OffSiteRedirect(int depth, Uri finalUrl, string startHost, int? httpStatusCode)
+    {
+        if (depth == 0 || DomainLinkRatio.IsWithinDomain(finalUrl.Host, startHost))
+        {
+            return null;
+        }
+
+        return new PageOutcome(CrawlPageStatus.Skipped, httpStatusCode, null, null, $"Redirects off-site to {finalUrl}");
     }
 
     /// <summary>After a redirect, the final URL is marked as this page so links to it aren't crawled again.</summary>

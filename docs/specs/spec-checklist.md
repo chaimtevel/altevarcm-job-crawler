@@ -89,8 +89,8 @@ How each requirement in `Technical Assessment.pdf` is met. Details are in the ro
 | Requirement | How it's met |
 |---|---|
 | Compose runs API, worker, DB, broker | `docker compose up -d --build` starts all of them; the API also serves the built React UI. |
-| README: how to run locally | Two copy-paste commands at the top of the README, plus the UI URL and test sites. |
+| README: how to run locally | Two copy-paste commands at the top of the README, plus the UI URL and a test site. |
 | README: architectural choices | README "Architecture" section has a diagram, project responsibilities and key choices with reasons. |
-| README: known limitations | README "Known limitations" lists auth, robots.txt, rate limiting, re-crawl depth and other gaps. |
+| README: known limitations | README "Known limitations" lists auth, JavaScript-rendered links, rate limiting and re-crawl depth. |
 | README: built first, cut, next | README section "What I built first, what I cut, what's next" covers all three. |
 | CI pipeline (optional) | `.github/workflows/ci.yml` builds and tests .NET and, in parallel, type-checks and builds the React app. |

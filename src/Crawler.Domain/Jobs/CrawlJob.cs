@@ -9,6 +9,13 @@ public enum CrawlJobStatus
     Canceled,
 }
 
+public static class CrawlJobStatusExtensions
+{
+    /// <summary>Pending or Running: the job can still crawl pages, be canceled or time out.</summary>
+    public static bool IsActive(this CrawlJobStatus status) =>
+        status is CrawlJobStatus.Pending or CrawlJobStatus.Running;
+}
+
 public class CrawlJob
 {
     public const int DefaultMaxDepth = 2;

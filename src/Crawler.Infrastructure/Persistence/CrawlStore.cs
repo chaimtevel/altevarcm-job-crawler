@@ -75,16 +75,19 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
 
     /// <summary>
     /// Saves a page's outcome and its outgoing links, enforcing the job's page limit,
-    /// then completes the job if nothing is pending. Returns the children that now need a crawl message.
+    /// then completes the job if nothing is pending. Returns the children that now need a crawl message,
+    /// or null if the job finished meanwhile and the result was discarded.
     /// </summary>
-    public Task<IReadOnlyList<QueuedPage>> SaveResultAsync(
+    public Task<IReadOnlyList<QueuedPage>?> SaveResultAsync(
         CrawlJob job,
         CrawlPage page,
-        PageOutcome outcome,
-        IReadOnlyList<DiscoveredLink> links,
-        DiscoveredLink? redirectTarget,
+        PageResult result,
         CancellationToken ct)
     {
+        var outcome = result.Outcome;
+        var redirectTarget = result.RedirectTarget;
+        // Page links first, so they win page-limit slots over sitemap URLs.
+        var links = result.Links.Concat(result.SitemapLinks).ToList();
         var childDepth = page.Depth + 1;
         var strategy = db.Database.CreateExecutionStrategy();
         return strategy.ExecuteAsync(async () =>
@@ -96,10 +99,10 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
             var locked = await db.Database.SqlQuery<LockedJob>(
                 $"""SELECT reserved_page_count AS reserved, status AS status FROM crawl_jobs WHERE id = {job.Id} FOR UPDATE""")
                 .ToListAsync(ct);
-            if (locked.Count == 0 || locked[0].Status is not (nameof(CrawlJobStatus.Pending) or nameof(CrawlJobStatus.Running)))
+            if (locked.Count == 0 || !Enum.Parse<CrawlJobStatus>(locked[0].Status).IsActive())
             {
                 // Deleted, canceled or timed out meanwhile: don't add new Pending pages to a finished job.
-                return (IReadOnlyList<QueuedPage>)[];
+                return (IReadOnlyList<QueuedPage>?)null;
             }
 
             if (redirectTarget is not null)
@@ -117,8 +120,14 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
                     .ExecuteUpdateAsync(s => s.SetProperty(j => j.ReservedPageCount, j => j.ReservedPageCount + reserved), ct);
             }
 
-            var queued = await UpsertChildPagesAsync(job.Id, page.Id, childDepth, limitedLinks, now, ct);
-            await InsertLinksAsync(job.Id, page.Id, limitedLinks, ct);
+            // Sitemap URLs past the page limit are dropped rather than stored as Skipped rows.
+            var pageLinkUrls = result.Links.Select(l => l.Url).ToHashSet();
+            var children = limitedLinks
+                .Where(l => pageLinkUrls.Contains(l.Url) || l.Status == CrawlPageStatus.Pending)
+                .ToList();
+
+            var queued = await UpsertChildPagesAsync(job.Id, page.Id, childDepth, children, now, ct);
+            await InsertLinksAsync(job.Id, page.Id, children.Where(l => pageLinkUrls.Contains(l.Url)).ToList(), ct);
             await UpdatePageAsync(page.Id, outcome, now, ct);
 
             if (page.Depth == 0 && outcome.Status == CrawlPageStatus.Failed)
@@ -131,7 +140,7 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
             }
 
             await tx.CommitAsync(ct);
-            return queued;
+            return (IReadOnlyList<QueuedPage>?)queued;
         });
     }
 
@@ -152,16 +161,12 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
                 return CancelJobResult.NotFound;
             }
 
-            if (statuses[0] is not (nameof(CrawlJobStatus.Pending) or nameof(CrawlJobStatus.Running)))
+            if (!Enum.Parse<CrawlJobStatus>(statuses[0]).IsActive())
             {
                 return CancelJobResult.AlreadyFinished;
             }
 
-            await db.Pages
-                .Where(p => p.JobId == jobId && p.Status == CrawlPageStatus.Pending)
-                .ExecuteUpdateAsync(s => s
-                    .SetProperty(p => p.Status, CrawlPageStatus.Skipped)
-                    .SetProperty(p => p.StatusReason, CanceledReason), ct);
+            await SkipPendingPagesAsync([jobId], CanceledReason, ct);
 
             var now = clock.GetUtcNow();
             await db.Jobs
@@ -199,11 +204,7 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
                 return 0;
             }
 
-            await db.Pages
-                .Where(p => p.Status == CrawlPageStatus.Pending && expiredJobIds.Contains(p.JobId))
-                .ExecuteUpdateAsync(s => s
-                    .SetProperty(p => p.Status, CrawlPageStatus.Skipped)
-                    .SetProperty(p => p.StatusReason, "Job timed out"), ct);
+            await SkipPendingPagesAsync(expiredJobIds, "Job timed out", ct);
 
             var timedOut = await db.Jobs
                 .Where(j => expiredJobIds.Contains(j.Id))
@@ -216,6 +217,14 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
             return timedOut;
         });
     }
+
+    /// <summary>Skips the unfetched pages of jobs being canceled or timed out; caller holds the job-row locks.</summary>
+    private Task SkipPendingPagesAsync(IReadOnlyCollection<Guid> jobIds, string reason, CancellationToken ct) =>
+        db.Pages
+            .Where(p => p.Status == CrawlPageStatus.Pending && jobIds.Contains(p.JobId))
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(p => p.Status, CrawlPageStatus.Skipped)
+                .SetProperty(p => p.StatusReason, reason), ct);
 
     /// <summary>
     /// Records the redirect target as this page, so links to it are known and never crawled.

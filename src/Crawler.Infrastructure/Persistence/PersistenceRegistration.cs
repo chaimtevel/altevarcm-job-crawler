@@ -15,6 +15,7 @@ public static class PersistenceRegistration
                 $"Connection string '{ConnectionStringName}' is not configured (ConnectionStrings__{ConnectionStringName}).");
 
         services.AddDbContext<CrawlerDbContext>(options => Configure(options, connectionString));
+        services.AddScoped<CrawlStore>();
         return services;
     }
 

@@ -26,29 +26,15 @@ public class PageFetcher(HttpClient http)
 
         try
         {
-            var current = url;
-            for (var hop = 0; ; hop++)
+            var (response, failure) = await GetFollowingRedirectsAsync(url, timeout.Token);
+            if (response is null)
             {
-                using var response = await http.GetAsync(current, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
-                var status = (int)response.StatusCode;
+                return failure!;
+            }
 
-                if (status is < 300 or >= 400 || response.Headers.Location is not { } location)
-                {
-                    return await ReadResponseAsync(response, current, timeout.Token);
-                }
-
-                if (hop >= MaxRedirects)
-                {
-                    return new(FetchStatus.Failed, status, null, null, "Too many redirects");
-                }
-
-                if (!Uri.TryCreate(response.RequestMessage?.RequestUri ?? current, location, out var next)
-                    || !UrlNormalizer.IsHttp(next))
-                {
-                    return new(FetchStatus.Failed, status, null, null, $"Redirects to unsupported URL {location}");
-                }
-
-                current = next;
+            using (response)
+            {
+                return await ReadResponseAsync(response, url, timeout.Token);
             }
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException)
@@ -58,6 +44,67 @@ public class PageFetcher(HttpClient http)
         catch (Exception ex) when (ex is TimeoutRejectedException or OperationCanceledException && !ct.IsCancellationRequested)
         {
             return new(FetchStatus.Failed, null, null, null, "Timed out");
+        }
+    }
+
+    /// <summary>Downloads a text file such as robots.txt or a sitemap; null on any failure.</summary>
+    public async Task<string?> FetchTextAsync(Uri url, CancellationToken ct)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TotalTimeout);
+
+        try
+        {
+            var (response, _) = await GetFollowingRedirectsAsync(url, timeout.Token);
+            if (response is null)
+            {
+                return null;
+            }
+
+            using (response)
+            {
+                return response.IsSuccessStatusCode ? await ReadLimitedAsync(response.Content, timeout.Token) : null;
+            }
+        }
+        catch (Exception ex) when (ex is HttpRequestException or IOException)
+        {
+            return null;
+        }
+        catch (Exception ex) when (ex is TimeoutRejectedException or OperationCanceledException && !ct.IsCancellationRequested)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Follows redirects up to the limit; returns the final response (caller disposes) or a failure.</summary>
+    private async Task<(HttpResponseMessage? Response, FetchResult? Failure)> GetFollowingRedirectsAsync(
+        Uri url, CancellationToken ct)
+    {
+        var current = url;
+        for (var hop = 0; ; hop++)
+        {
+            var response = await http.GetAsync(current, HttpCompletionOption.ResponseHeadersRead, ct);
+            var status = (int)response.StatusCode;
+
+            if (status is < 300 or >= 400 || response.Headers.Location is not { } location)
+            {
+                return (response, null);
+            }
+
+            var requested = response.RequestMessage?.RequestUri ?? current;
+            response.Dispose();
+            if (hop >= MaxRedirects)
+            {
+                return (null, new(FetchStatus.Failed, status, null, null, "Too many redirects"));
+            }
+
+            if (!Uri.TryCreate(requested, location, out var next)
+                || !UrlNormalizer.IsHttp(next))
+            {
+                return (null, new(FetchStatus.Failed, status, null, null, $"Redirects to unsupported URL {location}"));
+            }
+
+            current = next;
         }
     }
 

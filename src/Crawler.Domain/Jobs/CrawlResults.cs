@@ -11,6 +11,19 @@ public record PageOutcome(
     int? OutgoingLinkCount,
     string? StatusReason);
 
+/// <summary>
+/// Everything learned from one page. Sitemap links become child pages but not link edges,
+/// because the page itself doesn't link to them (and they don't count in its ratio).
+/// </summary>
+public record PageResult(
+    PageOutcome Outcome,
+    IReadOnlyList<DiscoveredLink> Links,
+    IReadOnlyList<DiscoveredLink> SitemapLinks,
+    DiscoveredLink? RedirectTarget)
+{
+    public static PageResult Without(PageOutcome outcome) => new(outcome, [], [], null);
+}
+
 /// <summary>A Pending page that needs a crawl message.</summary>
 public class QueuedPage
 {

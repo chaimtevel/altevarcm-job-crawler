@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Crawler.Tests.Integration;
 
@@ -123,6 +124,19 @@ public sealed class FixtureSiteCrawlTests : IAsyncLifetime
         Assert.Equal(FetchStatus.Html, result.Status);
         Assert.Equal("auth.example.org", result.FinalUrl!.Host);
         Assert.False(DomainLinkRatio.IsWithinDomain(result.FinalUrl.Host, StartHost));
+    }
+
+    [Fact]
+    public async Task Sitemap_urls_are_found_through_robots_txt_and_a_sitemap_index()
+    {
+        var reader = new SitemapReader(_fetcher, NullLogger<SitemapReader>.Instance);
+
+        // robots.txt → sitemap index → job sitemap; the missing nested sitemap is skipped.
+        var urls = await reader.ReadAsync(new Uri("http://localhost/index.html"), CancellationToken.None);
+
+        Assert.Equal(
+            ["http://localhost/job/corporate-recruiter/", "http://localhost/job/nurse/"],
+            urls.Select(u => u.AbsoluteUri));
     }
 
     private static Task Redirect(HttpContext context, string location)

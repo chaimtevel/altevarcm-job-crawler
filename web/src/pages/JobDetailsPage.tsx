@@ -110,8 +110,8 @@ export function JobDetailsPage() {
           {running
             ? `Crawling… ${done} of ${toFetch} pages fetched (limit ${data.maxPages}, updates every ${POLL_INTERVAL_MS / 1000}s)`
             : canceled
-              ? `Canceled after ${done} pages fetched · ${progress.discovered} links found`
-              : `${progress.crawled} pages crawled · ${progress.discovered} links found`}
+              ? `Canceled after ${done} pages fetched · ${progress.discovered} URLs recorded`
+              : `${progress.crawled} pages crawled · ${progress.discovered} URLs recorded`}
         </Typography.Text>
       </Card>
 
