@@ -23,6 +23,10 @@ public class CrawlPage
     public required string Url { get; set; }
 
     public int Depth { get; set; }
+
+    /// <summary>The page that first linked here; null for the root. Gives each page one tree parent.</summary>
+    public long? DiscoveredByPageId { get; set; }
+
     public bool IsInternal { get; set; }
     public CrawlPageStatus Status { get; set; }
     public string? StatusReason { get; set; }
@@ -31,6 +35,12 @@ public class CrawlPage
     public int? OutgoingLinkCount { get; set; }
     public DateTimeOffset DiscoveredAt { get; set; }
     public DateTimeOffset? CrawledAt { get; set; }
+
+    /// <summary>Set while a worker crawls the page; stops concurrent duplicate deliveries.</summary>
+    public DateTimeOffset? ClaimedAt { get; set; }
+
+    /// <summary>Set once its crawl message is published; redeliveries republish only unset ones.</summary>
+    public DateTimeOffset? EnqueuedAt { get; set; }
 
     /// <summary>The job's start page: depth 0, queued for crawling.</summary>
     public static CrawlPage Root(CrawlJob job) => new()

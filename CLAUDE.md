@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Coding preferences for this repo. The spec is `Technical Assessment.pdf`.
+Coding preferences for this repo. The spec is `docs/specs/Technical Assessment.pdf`.
 
 ## Working style
 - Work one step at a time: briefly explain the next step, then wait for approval.

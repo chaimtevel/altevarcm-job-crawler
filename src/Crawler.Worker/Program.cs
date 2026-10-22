@@ -1,4 +1,6 @@
 using Crawler.Infrastructure.Messaging;
+using HealthChecks.UI.Client;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Crawler.Infrastructure.Persistence;
 using Crawler.Worker.Crawling;
 using Microsoft.Extensions.Http.Resilience;
@@ -9,9 +11,12 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddCrawlerPersistence(builder.Configuration);
 builder.Services.AddDaprClient();
-builder.Services.AddHealthChecks();
+builder.Services.AddHealthChecks()
+    .AddDbContextCheck<CrawlerDbContext>("postgres")
+    .AddDapr();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<CrawlStore>();
+builder.Services.AddScoped<CrawlPagePublisher>();
 builder.Services.AddScoped<CrawlPageHandler>();
 builder.Services.AddHostedService<JobTimeoutService>();
 
@@ -53,6 +58,6 @@ app.MapPost("/messages/crawl-page", async (CrawlPageMessage message, CrawlPageHa
     })
     .WithTopic(CrawlMessaging.PubSubName, CrawlMessaging.CrawlPageTopic);
 
-app.MapHealthChecks("/health");
+app.MapHealthChecks("/health", new HealthCheckOptions { ResponseWriter = UIResponseWriter.WriteHealthCheckUIResponse });
 
 app.Run();

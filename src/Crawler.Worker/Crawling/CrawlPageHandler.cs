@@ -6,7 +6,12 @@ using Crawler.Infrastructure.Persistence;
 namespace Crawler.Worker.Crawling;
 
 /// <summary>Crawls one page per message. Safe to run twice for the same message.</summary>
-public class CrawlPageHandler(CrawlStore store, PageFetcher fetcher, TimeProvider clock, ILogger<CrawlPageHandler> logger)
+public class CrawlPageHandler(
+    CrawlStore store,
+    PageFetcher fetcher,
+    CrawlPagePublisher publisher,
+    TimeProvider clock,
+    ILogger<CrawlPageHandler> logger)
 {
     public async Task HandleAsync(CrawlPageMessage message, CancellationToken ct)
     {
@@ -26,12 +31,6 @@ public class CrawlPageHandler(CrawlStore store, PageFetcher fetcher, TimeProvide
             return;
         }
 
-        if (page.Status != CrawlPageStatus.Pending)
-        {
-            logger.LogInformation("Page {Url} already processed ({Status}); duplicate delivery ignored", page.Url, page.Status);
-            return;
-        }
-
         if (job.Status is CrawlJobStatus.Completed or CrawlJobStatus.Failed or CrawlJobStatus.Canceled)
         {
             logger.LogInformation("Job is {Status}; skipping page {Url}", job.Status, page.Url);
@@ -45,14 +44,48 @@ public class CrawlPageHandler(CrawlStore store, PageFetcher fetcher, TimeProvide
             return;
         }
 
-        await store.MarkJobRunningAsync(job.Id, ct);
+        IReadOnlyList<QueuedPage> children;
+        if (page.Status == CrawlPageStatus.Pending)
+        {
+            if (!await store.TryClaimPageAsync(page.Id, ct))
+            {
+                logger.LogInformation("Page {Url} is being crawled by another delivery; skipping", page.Url);
+                return;
+            }
 
-        var (outcome, links) = await CrawlAsync(job, page, ct);
-        await store.SaveResultAsync(job, page, outcome, links, ct);
+            children = await CrawlAndSaveAsync(job, page, ct);
+        }
+        else
+        {
+            // Redelivery: the save committed, but some child messages may not have been published.
+            children = await store.GetUnenqueuedChildrenAsync(page.Id, ct);
+            logger.LogInformation("Page {Url} already {Status}; publishing {Count} unsent children", page.Url, page.Status, children.Count);
+        }
 
-        logger.LogInformation(
-            "Page {Url} at depth {Depth}: {Status}, {LinkCount} links, ratio {Ratio}",
-            page.Url, page.Depth, outcome.Status, outcome.OutgoingLinkCount, outcome.DomainLinkRatio);
+        await publisher.PublishAsync(job, children, message.CorrelationId, ct);
+        await store.MarkEnqueuedAsync(children, ct);
+    }
+
+    private async Task<IReadOnlyList<QueuedPage>> CrawlAndSaveAsync(CrawlJob job, CrawlPage page, CancellationToken ct)
+    {
+        try
+        {
+            await store.MarkJobRunningAsync(job.Id, ct);
+
+            var (outcome, links) = await CrawlAsync(job, page, ct);
+            var children = await store.SaveResultAsync(job, page, outcome, links, ct);
+
+            logger.LogInformation(
+                "Page {Url} at depth {Depth}: {Status}, {LinkCount} links, ratio {Ratio}",
+                page.Url, page.Depth, outcome.Status, outcome.OutgoingLinkCount, outcome.DomainLinkRatio);
+            return children;
+        }
+        catch
+        {
+            // Let the message retry crawl the page instead of waiting for the claim to expire.
+            await store.ReleaseClaimAsync(page.Id, CancellationToken.None);
+            throw;
+        }
     }
 
     private async Task<(PageOutcome Outcome, IReadOnlyList<DiscoveredLink> Links)> CrawlAsync(
@@ -74,15 +107,19 @@ public class CrawlPageHandler(CrawlStore store, PageFetcher fetcher, TimeProvide
         return (new PageOutcome(CrawlPageStatus.Crawled, fetch.HttpStatusCode, ratio, urls.Count, null), links);
     }
 
+    /// <summary>Internal links within max depth are Pending; the store then applies the page limit.</summary>
     private static DiscoveredLink Classify(Uri url, string startHost, int childDepth, int maxDepth)
     {
         if (!DomainLinkRatio.IsWithinDomain(url.Host, startHost))
-            return new(url.AbsoluteUri, false, CrawlPageStatus.Skipped, "External link");
+        {
+            return new(url.AbsoluteUri, false, CrawlPageStatus.Skipped, SkipReasons.External);
+        }
 
         if (childDepth > maxDepth)
-            return new(url.AbsoluteUri, true, CrawlPageStatus.Skipped, "Beyond max depth");
+        {
+            return new(url.AbsoluteUri, true, CrawlPageStatus.Skipped, SkipReasons.BeyondMaxDepth);
+        }
 
-        // TODO(next step): reserve a page slot, mark Pending and publish a crawl message.
-        return new(url.AbsoluteUri, true, CrawlPageStatus.Skipped, "Not followed yet");
+        return new(url.AbsoluteUri, true, CrawlPageStatus.Pending, null);
     }
 }

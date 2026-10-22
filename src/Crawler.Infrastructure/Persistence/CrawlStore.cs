@@ -1,3 +1,4 @@
+using Crawler.Domain.Crawling;
 using Crawler.Domain.Jobs;
 using Microsoft.EntityFrameworkCore;
 
@@ -12,6 +13,51 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
     public Task<CrawlPage?> GetPageAsync(long pageId, CancellationToken ct) =>
         db.Pages.AsNoTracking().FirstOrDefaultAsync(p => p.Id == pageId, ct);
 
+    /// <summary>Longer than one fetch plus save; an expired claim means the worker crashed.</summary>
+    private static readonly TimeSpan ClaimLease = TimeSpan.FromMinutes(2);
+
+    /// <summary>Claims a Pending page for crawling; false if another delivery holds a live claim.</summary>
+    public async Task<bool> TryClaimPageAsync(long pageId, CancellationToken ct)
+    {
+        var now = clock.GetUtcNow();
+        var expired = now - ClaimLease;
+        var claimed = await db.Pages
+            .Where(p => p.Id == pageId
+                        && p.Status == CrawlPageStatus.Pending
+                        && (p.ClaimedAt == null || p.ClaimedAt < expired))
+            .ExecuteUpdateAsync(s => s.SetProperty(p => p.ClaimedAt, now), ct);
+        return claimed == 1;
+    }
+
+    /// <summary>Releases a claim after a failure so the message retry can crawl the page.</summary>
+    public Task ReleaseClaimAsync(long pageId, CancellationToken ct) =>
+        db.Pages
+            .Where(p => p.Id == pageId && p.Status == CrawlPageStatus.Pending)
+            .ExecuteUpdateAsync(s => s.SetProperty(p => p.ClaimedAt, (DateTimeOffset?)null), ct);
+
+    /// <summary>Pending children of this parent whose crawl message was never published.</summary>
+    public async Task<IReadOnlyList<QueuedPage>> GetUnenqueuedChildrenAsync(long parentPageId, CancellationToken ct) =>
+        await db.Pages.AsNoTracking()
+            .Where(p => p.DiscoveredByPageId == parentPageId
+                        && p.Status == CrawlPageStatus.Pending
+                        && p.EnqueuedAt == null)
+            .Select(p => new QueuedPage { Id = p.Id, Url = p.Url, Depth = p.Depth })
+            .ToListAsync(ct);
+
+    public Task MarkEnqueuedAsync(IReadOnlyList<QueuedPage> pages, CancellationToken ct)
+    {
+        if (pages.Count == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        var ids = pages.Select(p => p.Id).ToArray();
+        var now = clock.GetUtcNow();
+        return db.Pages
+            .Where(p => ids.Contains(p.Id))
+            .ExecuteUpdateAsync(s => s.SetProperty(p => p.EnqueuedAt, now), ct);
+    }
+
     /// <summary>Pending → Running; no-op if already started.</summary>
     public Task MarkJobRunningAsync(Guid jobId, CancellationToken ct)
     {
@@ -24,10 +70,10 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
     }
 
     /// <summary>
-    /// Saves a page's outcome and its outgoing links, then completes the job if nothing is pending.
-    /// Returns the child pages this call inserted (none on a redelivery).
+    /// Saves a page's outcome and its outgoing links, enforcing the job's page limit,
+    /// then completes the job if nothing is pending. Returns the children that now need a crawl message.
     /// </summary>
-    public Task<IReadOnlyList<NewPage>> SaveResultAsync(
+    public Task<IReadOnlyList<QueuedPage>> SaveResultAsync(
         CrawlJob job, CrawlPage page, PageOutcome outcome, IReadOnlyList<DiscoveredLink> links, CancellationToken ct)
     {
         var strategy = db.Database.CreateExecutionStrategy();
@@ -36,21 +82,42 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
             await using var tx = await db.Database.BeginTransactionAsync(ct);
             var now = clock.GetUtcNow();
 
-            // Serializes result-saving per job so the "nothing pending" completion check can't race.
-            await db.Database.ExecuteSqlInterpolatedAsync(
-                $"SELECT 1 FROM crawl_jobs WHERE id = {job.Id} FOR UPDATE", ct);
+            // Job row lock serializes saves per job: page-limit and completion checks can't race.
+            var lockedRows = await db.Database.SqlQuery<int>(
+                $"""SELECT reserved_page_count AS "Value" FROM crawl_jobs WHERE id = {job.Id} FOR UPDATE""")
+                .ToListAsync(ct);
+            if (lockedRows.Count == 0)
+            {
+                // Job was deleted meanwhile; nothing to save.
+                return (IReadOnlyList<QueuedPage>)[];
+            }
 
-            var inserted = await InsertChildPagesAsync(job.Id, page, links, now, ct);
-            await InsertLinksAsync(job.Id, page.Id, links, ct);
+            var childDepth = page.Depth + 1;
+            var knownUrls = await GetSlottedUrlsAsync(job.Id, links, childDepth, ct);
+            var (limitedLinks, reserved) = PageLimit.Apply(links, knownUrls, job.MaxPages - lockedRows[0]);
+
+            if (reserved > 0)
+            {
+                await db.Jobs
+                    .Where(j => j.Id == job.Id)
+                    .ExecuteUpdateAsync(s => s.SetProperty(j => j.ReservedPageCount, j => j.ReservedPageCount + reserved), ct);
+            }
+
+            var queued = await UpsertChildPagesAsync(job.Id, page, limitedLinks, now, ct);
+            await InsertLinksAsync(job.Id, page.Id, limitedLinks, ct);
             await UpdatePageAsync(page.Id, outcome, now, ct);
 
             if (page.Depth == 0 && outcome.Status == CrawlPageStatus.Failed)
+            {
                 await FailJobAsync(job.Id, $"Start page could not be crawled: {outcome.StatusReason}", now, ct);
+            }
             else
+            {
                 await CompleteJobIfDoneAsync(job.Id, now, ct);
+            }
 
             await tx.CommitAsync(ct);
-            return inserted;
+            return queued;
         });
     }
 
@@ -74,7 +141,9 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
                 """).ToListAsync(ct);
 
             if (expiredJobIds.Count == 0)
+            {
                 return 0;
+            }
 
             await db.Pages
                 .Where(p => p.Status == CrawlPageStatus.Pending && expiredJobIds.Contains(p.JobId))
@@ -94,11 +163,33 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
         });
     }
 
-    private async Task<IReadOnlyList<NewPage>> InsertChildPagesAsync(
+    /// <summary>Known URLs that need no new slot; a beyond-depth row reachable at a shallower depth needs one.</summary>
+    private async Task<IReadOnlySet<string>> GetSlottedUrlsAsync(
+        Guid jobId, IReadOnlyList<DiscoveredLink> links, int childDepth, CancellationToken ct)
+    {
+        var urls = links.Select(l => l.Url).ToArray();
+        var known = await db.Pages
+            .Where(p => p.JobId == jobId
+                        && urls.Contains(p.Url)
+                        && !(p.Status == CrawlPageStatus.Skipped
+                             && p.StatusReason == SkipReasons.BeyondMaxDepth
+                             && p.Depth > childDepth))
+            .Select(p => p.Url)
+            .ToListAsync(ct);
+        return known.ToHashSet();
+    }
+
+    /// <summary>
+    /// Inserts new child pages. An uncrawled existing page reached by a shorter path takes the shallower
+    /// depth and this parent; if it was skipped as beyond max depth it gets this link's status.
+    /// </summary>
+    private async Task<IReadOnlyList<QueuedPage>> UpsertChildPagesAsync(
         Guid jobId, CrawlPage parent, IReadOnlyList<DiscoveredLink> links, DateTimeOffset now, CancellationToken ct)
     {
         if (links.Count == 0)
+        {
             return [];
+        }
 
         var urls = links.Select(l => l.Url).ToArray();
         var internals = links.Select(l => l.IsInternal).ToArray();
@@ -106,20 +197,42 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
         var reasons = links.Select(l => l.StatusReason).ToArray();
         var depth = parent.Depth + 1;
 
-        // ON CONFLICT: a URL already known to this job keeps its first-discovered row.
-        return await db.Database.SqlQuery<NewPage>($"""
-            INSERT INTO crawl_pages (job_id, url, depth, is_internal, status, status_reason, discovered_at)
-            SELECT {jobId}, c.url, {depth}, c.is_internal, c.status, c.reason, {now}
+        var rows = await db.Database.SqlQuery<UpsertedPage>($"""
+            INSERT INTO crawl_pages AS p (job_id, url, depth, discovered_by_page_id, is_internal, status, status_reason, discovered_at)
+            SELECT {jobId}, c.url, {depth}, {parent.Id}, c.is_internal, c.status, c.reason, {now}
             FROM unnest({urls}, {internals}, {statuses}, {reasons}) AS c(url, is_internal, status, reason)
-            ON CONFLICT (job_id, url) DO NOTHING
-            RETURNING id, url, status
+            ON CONFLICT (job_id, url) DO UPDATE SET
+                depth = EXCLUDED.depth,
+                discovered_by_page_id = EXCLUDED.discovered_by_page_id,
+                status = CASE WHEN p.status = 'Skipped' THEN EXCLUDED.status ELSE p.status END,
+                status_reason = CASE WHEN p.status = 'Skipped' THEN EXCLUDED.status_reason ELSE p.status_reason END
+            WHERE EXCLUDED.depth < p.depth
+              AND (p.status = 'Pending' OR (p.status = 'Skipped' AND p.status_reason = {SkipReasons.BeyondMaxDepth}))
+            RETURNING p.id, p.url, p.depth, p.status, (p.enqueued_at IS NULL) AS unsent
             """).ToListAsync(ct);
+
+        return rows
+            .Where(r => r.Status == nameof(CrawlPageStatus.Pending) && r.Unsent)
+            .Select(r => new QueuedPage { Id = r.Id, Url = r.Url, Depth = r.Depth })
+            .ToList();
+    }
+
+    // Single-word columns so the raw SQL maps regardless of naming convention.
+    private class UpsertedPage
+    {
+        public long Id { get; set; }
+        public string Url { get; set; } = "";
+        public int Depth { get; set; }
+        public string Status { get; set; } = "";
+        public bool Unsent { get; set; }
     }
 
     private Task InsertLinksAsync(Guid jobId, long parentPageId, IReadOnlyList<DiscoveredLink> links, CancellationToken ct)
     {
         if (links.Count == 0)
+        {
             return Task.CompletedTask;
+        }
 
         var urls = links.Select(l => l.Url).ToArray();
         return db.Database.ExecuteSqlInterpolatedAsync($"""

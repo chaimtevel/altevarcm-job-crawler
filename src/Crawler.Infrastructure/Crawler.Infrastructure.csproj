@@ -9,6 +9,7 @@
     Relational is explicit so consumers don't resolve Npgsql's older EF Core.
   -->
   <ItemGroup>
+    <PackageReference Include="Dapr.Client" Version="1.18.10" />
     <PackageReference Include="EFCore.NamingConventions" Version="8.0.3" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.32">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>

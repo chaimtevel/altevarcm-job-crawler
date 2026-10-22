@@ -8,7 +8,10 @@
   <ItemGroup>
     <!-- AngleSharp over HtmlAgilityPack: HTML5-spec parser, handles malformed markup like browsers do. -->
     <PackageReference Include="AngleSharp" Version="1.8.4" />
+    <PackageReference Include="AspNetCore.HealthChecks.Dapr" Version="9.0.0" />
+    <PackageReference Include="AspNetCore.HealthChecks.UI.Client" Version="9.0.0" />
     <PackageReference Include="Dapr.AspNetCore" Version="1.18.10" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.EntityFrameworkCore" Version="8.0.32" />
     <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="10.10.0" />
   </ItemGroup>
 

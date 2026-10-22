@@ -88,6 +88,10 @@ namespace Crawler.Infrastructure.Persistence.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityAlwaysColumn(b.Property<long>("Id"));
 
+                    b.Property<DateTimeOffset?>("ClaimedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("claimed_at");
+
                     b.Property<DateTimeOffset?>("CrawledAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("crawled_at");
@@ -100,9 +104,17 @@ namespace Crawler.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("discovered_at");
 
+                    b.Property<long?>("DiscoveredByPageId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("discovered_by_page_id");
+
                     b.Property<double?>("DomainLinkRatio")
                         .HasColumnType("double precision")
                         .HasColumnName("domain_link_ratio");
+
+                    b.Property<DateTimeOffset?>("EnqueuedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("enqueued_at");
 
                     b.Property<int?>("HttpStatusCode")
                         .HasColumnType("integer")
@@ -138,6 +150,9 @@ namespace Crawler.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_crawl_pages");
+
+                    b.HasIndex("DiscoveredByPageId")
+                        .HasDatabaseName("ix_crawl_pages_discovered_by_page_id");
 
                     b.HasIndex("JobId", "Status")
                         .HasDatabaseName("ix_crawl_pages_job_id_status");
@@ -177,6 +192,12 @@ namespace Crawler.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("Crawler.Domain.Jobs.CrawlPage", b =>
                 {
+                    b.HasOne("Crawler.Domain.Jobs.CrawlPage", null)
+                        .WithMany()
+                        .HasForeignKey("DiscoveredByPageId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .HasConstraintName("fk_crawl_pages_crawl_pages_discovered_by_page_id");
+
                     b.HasOne("Crawler.Domain.Jobs.CrawlJob", null)
                         .WithMany()
                         .HasForeignKey("JobId")

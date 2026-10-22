@@ -11,5 +11,17 @@ public record PageOutcome(
     int? OutgoingLinkCount,
     string? StatusReason);
 
-/// <summary>A page row inserted while saving a result; Pending ones still need a crawl message.</summary>
-public record NewPage(long Id, string Url, string Status);
+/// <summary>A Pending page that needs a crawl message.</summary>
+public class QueuedPage
+{
+    public long Id { get; set; }
+    public string Url { get; set; } = "";
+    public int Depth { get; set; }
+}
+
+public static class SkipReasons
+{
+    public const string External = "External link";
+    public const string BeyondMaxDepth = "Beyond max depth";
+    public const string PageLimitReached = "Page limit reached";
+}

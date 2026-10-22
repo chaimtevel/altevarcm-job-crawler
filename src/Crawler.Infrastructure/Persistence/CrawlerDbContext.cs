@@ -36,8 +36,11 @@ public class CrawlerDbContext(DbContextOptions<CrawlerDbContext> options) : DbCo
             page.HasIndex(p => new { p.JobId, p.Url }).IsUnique();
             // Progress counts and "any pages still pending?" completion check.
             page.HasIndex(p => new { p.JobId, p.Status });
+            // Finding a page's discovered children (publishing, tree building).
+            page.HasIndex(p => p.DiscoveredByPageId);
 
             page.HasOne<CrawlJob>().WithMany().HasForeignKey(p => p.JobId).OnDelete(DeleteBehavior.Cascade);
+            page.HasOne<CrawlPage>().WithMany().HasForeignKey(p => p.DiscoveredByPageId).OnDelete(DeleteBehavior.NoAction);
         });
 
         modelBuilder.Entity<PageLink>(link =>

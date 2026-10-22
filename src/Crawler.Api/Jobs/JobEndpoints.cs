@@ -2,7 +2,6 @@ using System.Diagnostics;
 using Crawler.Domain.Jobs;
 using Crawler.Infrastructure.Messaging;
 using Crawler.Infrastructure.Persistence;
-using Dapr.Client;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.EntityFrameworkCore;
 
@@ -21,6 +20,8 @@ public static class JobEndpoints
         jobs.MapPost("/", CreateJob).WithName(nameof(CreateJob));
         jobs.MapGet("/{jobId:guid}", GetJob).WithName(nameof(GetJob));
         jobs.MapGet("/", ListJobs).WithName(nameof(ListJobs));
+        jobs.MapGet("/{jobId:guid}/tree", GetJobTree).WithName(nameof(GetJobTree));
+        jobs.MapGet("/{jobId:guid}/pages/{pageId:long}/links", GetPageLinks).WithName(nameof(GetPageLinks));
 
         return routes;
     }
@@ -28,7 +29,7 @@ public static class JobEndpoints
     private static async Task<Results<Created<CreateJobResponse>, ValidationProblem, ProblemHttpResult>> CreateJob(
         CreateJobRequest request,
         CrawlerDbContext db,
-        DaprClient dapr,
+        CrawlPagePublisher publisher,
         TimeProvider clock,
         ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -37,7 +38,9 @@ public static class JobEndpoints
 
         var (startUrl, errors) = CreateJobValidator.Validate(request);
         if (startUrl is null)
+        {
             return TypedResults.ValidationProblem(errors);
+        }
 
         var job = CrawlJob.Create(
             startUrl,
@@ -57,10 +60,9 @@ public static class JobEndpoints
 
         try
         {
-            var message = new CrawlPageMessage(job.Id, root.Id, root.Url, root.Depth, correlationId);
-            var metadata = CrawlMessaging.PublishMetadata(job.GetDeadline(), clock.GetUtcNow());
             // The job is saved, so finish publishing even if the client disconnects.
-            await dapr.PublishEventAsync(CrawlMessaging.PubSubName, CrawlMessaging.CrawlPageTopic, message, metadata, CancellationToken.None);
+            var queued = new QueuedPage { Id = root.Id, Url = root.Url, Depth = root.Depth };
+            await publisher.PublishAsync(job, [queued], correlationId, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -89,7 +91,9 @@ public static class JobEndpoints
     {
         var job = await db.Jobs.AsNoTracking().FirstOrDefaultAsync(j => j.Id == jobId, ct);
         if (job is null)
+        {
             return TypedResults.NotFound();
+        }
 
         // One GROUP BY over the (job_id, status) index instead of loading pages.
         var counts = await db.Pages
@@ -138,5 +142,47 @@ public static class JobEndpoints
             .ToListAsync(ct);
 
         return TypedResults.Ok(new PagedResponse<JobSummary>(items, page, pageSize, totalCount));
+    }
+
+    private static async Task<Results<Ok<JobTreeResponse>, NotFound>> GetJobTree(
+        Guid jobId,
+        CrawlerDbContext db,
+        CancellationToken ct)
+    {
+        var job = await db.Jobs.AsNoTracking().FirstOrDefaultAsync(j => j.Id == jobId, ct);
+        if (job is null)
+        {
+            return TypedResults.NotFound();
+        }
+
+        // Only reserved pages (never-fetched Skipped links excluded), so size is bounded by MaxPages.
+        // Skipped links remain available per page via the links endpoint.
+        var pages = await db.Pages.AsNoTracking()
+            .Where(p => p.JobId == jobId && (p.Status != CrawlPageStatus.Skipped || p.CrawledAt != null))
+            .ToListAsync(ct);
+
+        return TypedResults.Ok(new JobTreeResponse(job.Id, job.Status, JobTreeBuilder.Build(pages)));
+    }
+
+    private static async Task<Results<Ok<IReadOnlyList<PageLinkResponse>>, NotFound>> GetPageLinks(
+        Guid jobId,
+        long pageId,
+        CrawlerDbContext db,
+        CancellationToken ct)
+    {
+        var pageExists = await db.Pages.AnyAsync(p => p.Id == pageId && p.JobId == jobId, ct);
+        if (!pageExists)
+        {
+            return TypedResults.NotFound();
+        }
+
+        IReadOnlyList<PageLinkResponse> links = await db.Links
+            .Where(l => l.JobId == jobId && l.ParentPageId == pageId)
+            .Join(db.Pages, l => l.ChildPageId, p => p.Id, (l, p) => p)
+            .OrderBy(p => p.Id)
+            .Select(p => new PageLinkResponse(p.Id, p.Url, p.IsInternal, p.Status))
+            .ToListAsync(ct);
+
+        return TypedResults.Ok(links);
     }
 }
