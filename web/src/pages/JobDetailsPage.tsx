@@ -71,7 +71,7 @@ export function JobDetailsPage() {
     <Space direction="vertical" size="large" className="full">
       <Card>
         <Space align="center" wrap>
-          <Typography.Title level={3} className="no-margin">
+          <Typography.Title level={3} className="no-margin" copyable={{ text: data.url, tooltips: ['Copy URL', 'Copied'] }}>
             <a href={data.url} target="_blank" rel="noreferrer">{data.url}</a>
           </Typography.Title>
           <StatusBadge status={data.status} />
@@ -91,7 +91,7 @@ export function JobDetailsPage() {
         <Typography.Paragraph type="secondary" className="meta">
           Created {formatDate(data.createdAt)} · Started {formatDate(data.startedAt)} · Completed{' '}
           {formatDate(data.completedAt)} · Duration {formatDuration(data.startedAt, data.completedAt)} · Max depth{' '}
-          {data.maxDepth} · Limit {data.maxPages} pages · Job <Typography.Text code>{data.jobId}</Typography.Text>
+          {data.maxDepth} · Limit {data.maxPages} pages · Job <Typography.Text code copyable={{ tooltips: ['Copy job ID', 'Copied'] }}>{data.jobId}</Typography.Text>
         </Typography.Paragraph>
         {data.failureReason && <Alert type="error" showIcon message="Job failed" description={data.failureReason} />}
       </Card>

@@ -93,6 +93,7 @@ Delivery is at-least-once; duplicates are harmless because of:
 ## Known limitations
 
 - No authentication; Swagger is always on; `.env` credentials are for local use only.
+- The API runs database migrations at startup for convenience; production would run them as a deploy step.
 - JavaScript isn't run: links added after page load are found only if the sitemap lists them.
 - No rate limiting (about 10 pages in parallel), so bot protection may answer with 403/429 (shown as Failed).
 - A page already crawled isn't re-crawled when a shorter path to it turns up later.

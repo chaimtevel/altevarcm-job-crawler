@@ -21,6 +21,11 @@ public class CrawlerDbContext(DbContextOptions<CrawlerDbContext> options) : DbCo
 
             // History screen: most recent first, paginated.
             job.HasIndex(j => j.CreatedAt).IsDescending();
+
+            // Timeout sweep: indexes only active jobs, so it stays tiny as history grows.
+            job.HasIndex(j => j.CreatedAt, "ActiveJobsByCreatedAt")
+                .HasDatabaseName("ix_crawl_jobs_active_created_at")
+                .HasFilter("status IN ('Pending', 'Running')");
         });
 
         modelBuilder.Entity<CrawlPage>(page =>

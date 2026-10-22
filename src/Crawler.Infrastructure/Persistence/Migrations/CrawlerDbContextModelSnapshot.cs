@@ -76,6 +76,10 @@ namespace Crawler.Infrastructure.Persistence.Migrations
                         .IsDescending()
                         .HasDatabaseName("ix_crawl_jobs_created_at");
 
+                    b.HasIndex(new[] { "CreatedAt" }, "ActiveJobsByCreatedAt")
+                        .HasDatabaseName("ix_crawl_jobs_active_created_at")
+                        .HasFilter("status IN ('Pending', 'Running')");
+
                     b.ToTable("crawl_jobs", (string)null);
                 });
 

@@ -24,7 +24,7 @@ builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
-// The API owns the schema: it applies pending migrations once at startup.
+// Demo convenience: migrations run at startup. In production they'd run as a separate deploy step.
 await using (var scope = app.Services.CreateAsyncScope())
 {
     await scope.ServiceProvider.GetRequiredService<CrawlerDbContext>().Database.MigrateAsync();
