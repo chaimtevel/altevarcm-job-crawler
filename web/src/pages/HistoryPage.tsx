@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Card, Input, Table, Typography } from 'antd';
@@ -22,6 +23,10 @@ export function HistoryPage() {
   const page = Math.max(1, Number(searchParams.get('page')) || 1);
   const search = searchParams.get('q') ?? '';
 
+  // Controlled box, synced from ?q= (Back, menu link) without remounting, so it keeps focus.
+  const [searchText, setSearchText] = useState(search);
+  useEffect(() => setSearchText(search), [search]);
+
   const jobs = useQuery({
     queryKey: ['jobs', page, search],
     queryFn: () => api.listJobs(page, PAGE_SIZE, search),
@@ -40,7 +45,8 @@ export function HistoryPage() {
         <Input.Search
           placeholder="Search URLs, e.g. books.toscrape"
           allowClear
-          defaultValue={search}
+          value={searchText}
+          onChange={(e) => setSearchText(e.target.value)}
           onSearch={(value) => setSearchParams(value.trim() ? { q: value.trim() } : {})}
           style={{ width: 280 }}
         />

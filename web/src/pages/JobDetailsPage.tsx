@@ -70,6 +70,20 @@ export function JobDetailsPage() {
   const running = isActive(data.status);
   const canceled = data.status === 'Canceled';
 
+  const progressText = () => {
+    if (data.status === 'Pending') {
+      return 'Queued, waiting for a worker to pick up the start page…';
+    }
+    if (running) {
+      const updates = live ? 'live' : `updates every ${POLL_INTERVAL_MS / 1000}s`;
+      return `Crawling… ${done} of ${toFetch} pages fetched (limit ${data.maxPages}, ${updates})`;
+    }
+    if (canceled) {
+      return `Canceled after ${done} pages fetched · ${progress.discovered} URLs recorded`;
+    }
+    return `${progress.crawled} pages crawled · ${progress.discovered} URLs recorded`;
+  };
+
   return (
     <Space direction="vertical" size="large" className="full">
       <Card>
@@ -109,15 +123,7 @@ export function JobDetailsPage() {
       <Card size="small">
         {/* Cancel skips all pending pages, so a percentage would read 100%; the text says what happened. */}
         {!canceled && <Progress percent={running ? percent : 100} status={progressStatus(data.status)} />}
-        <Typography.Text type="secondary">
-          {data.status === 'Pending'
-            ? 'Queued, waiting for a worker to pick up the start page…'
-            : running
-            ? `Crawling… ${done} of ${toFetch} pages fetched (limit ${data.maxPages}, ${live ? 'live' : `updates every ${POLL_INTERVAL_MS / 1000}s`})`
-            : canceled
-              ? `Canceled after ${done} pages fetched · ${progress.discovered} URLs recorded`
-              : `${progress.crawled} pages crawled · ${progress.discovered} URLs recorded`}
-        </Typography.Text>
+        <Typography.Text type="secondary">{progressText()}</Typography.Text>
       </Card>
 
       {finished && (

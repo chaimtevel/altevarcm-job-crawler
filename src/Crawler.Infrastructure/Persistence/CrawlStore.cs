@@ -82,12 +82,11 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
     }
 
     /// <summary>Inside a transaction Postgres delivers this on commit, so listeners never see uncommitted state.</summary>
-    private async Task NotifyProgressAsync(IEnumerable<Guid> jobIds, CancellationToken ct)
+    private async Task NotifyProgressAsync(Guid[] jobIds, CancellationToken ct)
     {
-        foreach (var jobId in jobIds)
-        {
-            await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_notify({ProgressChannel}, {jobId.ToString()})", ct);
-        }
+        // One statement for any number of jobs (the timeout sweep can pass many).
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_notify({ProgressChannel}, id::text) FROM unnest({jobIds}) AS id", ct);
     }
 
     /// <summary>
@@ -216,9 +215,9 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
                 WHERE status IN ('Pending', 'Running') AND created_at < {cutoff}
                 ORDER BY id
                 FOR UPDATE
-                """).ToListAsync(ct);
+                """).ToArrayAsync(ct);
 
-            if (expiredJobIds.Count == 0)
+            if (expiredJobIds.Length == 0)
             {
                 return 0;
             }
