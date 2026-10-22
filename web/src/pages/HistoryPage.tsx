@@ -45,6 +45,7 @@ export function HistoryPage() {
         pagination={{
           current: page,
           pageSize: PAGE_SIZE,
+          showSizeChanger: false,
           total: jobs.data?.totalCount ?? 0,
           onChange: (next) => setSearchParams({ page: String(next) }),
           showTotal: (total) => `${total} jobs`,

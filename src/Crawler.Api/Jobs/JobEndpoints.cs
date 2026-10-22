@@ -22,8 +22,30 @@ public static class JobEndpoints
         jobs.MapGet("/", ListJobs).WithName(nameof(ListJobs));
         jobs.MapGet("/{jobId:guid}/tree", GetJobTree).WithName(nameof(GetJobTree));
         jobs.MapGet("/{jobId:guid}/pages/{pageId:long}/links", GetPageLinks).WithName(nameof(GetPageLinks));
+        jobs.MapPost("/{jobId:guid}/cancel", CancelJob).WithName(nameof(CancelJob));
 
         return routes;
+    }
+
+    private static async Task<Results<NoContent, NotFound, ProblemHttpResult>> CancelJob(
+        Guid jobId,
+        CrawlStore store,
+        ILoggerFactory loggerFactory,
+        CancellationToken ct)
+    {
+        var result = await store.CancelJobAsync(jobId, ct);
+        if (result == CancelJobResult.NotFound)
+        {
+            return TypedResults.NotFound();
+        }
+
+        if (result == CancelJobResult.AlreadyFinished)
+        {
+            return TypedResults.Problem("Only pending or running jobs can be canceled.", statusCode: StatusCodes.Status409Conflict);
+        }
+
+        loggerFactory.CreateLogger(typeof(JobEndpoints).FullName!).LogInformation("Canceled crawl job {JobId}", jobId);
+        return TypedResults.NoContent();
     }
 
     private static async Task<Results<Created<CreateJobResponse>, ValidationProblem, ProblemHttpResult>> CreateJob(

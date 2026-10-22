@@ -30,6 +30,7 @@ public sealed class FixtureSiteCrawlTests : IAsyncLifetime
                     // TestServer's client doesn't follow redirects, like a refused https→http downgrade.
                     app.Map("/moved", moved => moved.Run(ctx => Redirect(ctx, "blog/post.html")));
                     app.Map("/loop", loop => loop.Run(ctx => Redirect(ctx, "/loop")));
+                    app.Map("/login", login => login.Run(ctx => Redirect(ctx, "http://auth.example.org/about.html")));
                     app.UseStaticFiles(new StaticFileOptions { FileProvider = new PhysicalFileProvider(fixtures) });
                 }))
             .StartAsync();
@@ -111,6 +112,17 @@ public sealed class FixtureSiteCrawlTests : IAsyncLifetime
 
         Assert.Equal(FetchStatus.Failed, result.Status);
         Assert.Equal("Too many redirects", result.Reason);
+    }
+
+    [Fact]
+    public async Task Off_site_redirect_reports_the_outside_final_url()
+    {
+        // TestServer answers any host, so the "outside" page is served from the fixtures too.
+        var result = await _fetcher.FetchAsync(new Uri("http://localhost/login"), CancellationToken.None);
+
+        Assert.Equal(FetchStatus.Html, result.Status);
+        Assert.Equal("auth.example.org", result.FinalUrl!.Host);
+        Assert.False(DomainLinkRatio.IsWithinDomain(result.FinalUrl.Host, StartHost));
     }
 
     private static Task Redirect(HttpContext context, string location)

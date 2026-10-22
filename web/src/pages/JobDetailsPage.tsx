@@ -1,8 +1,7 @@
-import { useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { Alert, Card, Col, Progress, Row, Space, Statistic, Switch, Typography } from 'antd';
-import { api, formatDate, formatDuration, isActive, type TreeNode } from '../api';
+import { Link, useParams } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Alert, Button, Card, Col, Popconfirm, Progress, Result, Row, Space, Statistic, Typography } from 'antd';
+import { api, ApiError, formatDate, formatDuration, isActive, type JobStatus } from '../api';
 import { StatusBadge } from '../components/StatusBadge';
 import { ErrorMessage, Loading } from '../components/States';
 import { PageTree } from '../components/PageTree';
@@ -11,13 +10,27 @@ const POLL_INTERVAL_MS = 2000;
 
 export function JobDetailsPage() {
   const { jobId = '' } = useParams();
-  const [hideSkipped, setHideSkipped] = useState(false);
 
   const job = useQuery({
     queryKey: ['job', jobId],
     queryFn: () => api.getJob(jobId),
     // Poll while the job runs; stop once it reaches a final status.
     refetchInterval: (query) => (isActive(query.state.data?.status) ? POLL_INTERVAL_MS : false),
+  });
+
+  const queryClient = useQueryClient();
+  const cancelJob = useMutation({
+    // 409 = the job finished on its own just before the click; the refresh below shows its final status.
+    mutationFn: () => api.cancelJob(jobId).catch((error) => {
+      if (!(error instanceof ApiError && error.status === 409)) {
+        throw error;
+      }
+    }),
+    // Refresh the job and job lists so every screen shows Canceled right away.
+    onSettled: () => Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['job', jobId] }),
+      queryClient.invalidateQueries({ queryKey: ['jobs'] }),
+    ]),
   });
 
   const finished = job.data !== undefined && !isActive(job.data.status);
@@ -28,13 +41,18 @@ export function JobDetailsPage() {
     enabled: finished,
   });
 
-  const root = useMemo(
-    () => (tree.data?.root && hideSkipped ? withoutSkipped(tree.data.root) : tree.data?.root ?? null),
-    [tree.data, hideSkipped],
-  );
-
   if (job.isPending) {
     return <Loading label="Loading job…" />;
+  }
+  if (job.error instanceof ApiError && job.error.status === 404) {
+    return (
+      <Result
+        status="404"
+        title="Job not found"
+        subTitle="This crawl job doesn't exist, or the database was reset."
+        extra={<Link to="/history">Back to history</Link>}
+      />
+    );
   }
   if (job.isError) {
     return <ErrorMessage error={job.error} />;
@@ -47,6 +65,7 @@ export function JobDetailsPage() {
   const toFetch = done + progress.pending;
   const percent = toFetch === 0 ? 0 : Math.round((done / toFetch) * 100);
   const running = isActive(data.status);
+  const canceled = data.status === 'Canceled';
 
   return (
     <Space direction="vertical" size="large" className="full">
@@ -56,7 +75,19 @@ export function JobDetailsPage() {
             <a href={data.url} target="_blank" rel="noreferrer">{data.url}</a>
           </Typography.Title>
           <StatusBadge status={data.status} />
+          {running && (
+            <Popconfirm
+              title="Cancel this crawl?"
+              description="Pages not fetched yet will be skipped."
+              okText="Cancel crawl"
+              cancelText="Keep running"
+              onConfirm={() => cancelJob.mutate()}
+            >
+              <Button danger size="small" loading={cancelJob.isPending}>Cancel</Button>
+            </Popconfirm>
+          )}
         </Space>
+        {cancelJob.isError && running && <Alert type="error" showIcon message="Could not cancel the crawl" description={cancelJob.error.message} />}
         <Typography.Paragraph type="secondary" className="meta">
           Created {formatDate(data.createdAt)} · Started {formatDate(data.startedAt)} · Completed{' '}
           {formatDate(data.completedAt)} · Duration {formatDuration(data.startedAt, data.completedAt)} · Max depth{' '}
@@ -73,19 +104,19 @@ export function JobDetailsPage() {
       </Row>
 
       <Card size="small">
-        <Progress percent={running ? percent : 100} status={running ? 'active' : data.status === 'Failed' ? 'exception' : 'success'} />
+        {/* Cancel skips all pending pages, so a percentage would read 100%; the text says what happened. */}
+        {!canceled && <Progress percent={running ? percent : 100} status={progressStatus(data.status)} />}
         <Typography.Text type="secondary">
           {running
             ? `Crawling… ${done} of ${toFetch} pages fetched (limit ${data.maxPages}, updates every ${POLL_INTERVAL_MS / 1000}s)`
-            : `${progress.discovered} pages discovered`}
+            : canceled
+              ? `Canceled after ${done} pages fetched · ${progress.discovered} links found`
+              : `${progress.crawled} pages crawled · ${progress.discovered} links found`}
         </Typography.Text>
       </Card>
 
       {finished && (
-        <Card
-          title="Discovered pages"
-          extra={<Space><Switch size="small" checked={hideSkipped} onChange={setHideSkipped} /> Hide skipped</Space>}
-        >
+        <Card title="Discovered pages">
           <Typography.Paragraph type="secondary">
             <b>Domain Link Ratio</b> = links that stay on the starting site ÷ all links on the page (1.00 = all internal).
             Expand a row to see the pages it led to; click "links" to see every outgoing link. The tree lists
@@ -94,13 +125,21 @@ export function JobDetailsPage() {
           </Typography.Paragraph>
           {tree.isPending && <Loading label="Loading pages…" />}
           {tree.isError && <ErrorMessage error={tree.error} />}
-          {tree.data && (root ? <PageTree jobId={jobId} root={root} /> : <Typography.Text type="secondary">No pages were crawled.</Typography.Text>)}
+          {tree.data && (tree.data.root ? <PageTree jobId={jobId} root={tree.data.root} /> : <Typography.Text type="secondary">No pages were crawled.</Typography.Text>)}
         </Card>
       )}
     </Space>
   );
 }
 
-function withoutSkipped(node: TreeNode): TreeNode {
-  return { ...node, children: node.children.filter((c) => c.status !== 'Skipped').map(withoutSkipped) };
+function progressStatus(status: JobStatus) {
+  switch (status) {
+    case 'Pending':
+    case 'Running':
+      return 'active';
+    case 'Failed':
+      return 'exception';
+    default:
+      return 'success';
+  }
 }

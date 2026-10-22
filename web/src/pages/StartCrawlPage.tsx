@@ -49,7 +49,7 @@ export function StartCrawlPage() {
               />
             </Form.Item>
             <Form.Item label="Max depth" validateStatus={depthError ? 'error' : undefined} help={depthError}>
-              <InputNumber size="large" min={0} max={MAX_DEPTH} placeholder={String(DEFAULT_MAX_DEPTH)} value={maxDepth} onChange={(value) => {
+              <InputNumber size="large" min={0} max={MAX_DEPTH} precision={0} placeholder={String(DEFAULT_MAX_DEPTH)} value={maxDepth} onChange={(value) => {
                 setMaxDepth(value);
                 createJob.reset();
               }} />

@@ -4,9 +4,13 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Crawler.Infrastructure.Persistence;
 
-/// <summary>Worker-side persistence. Every write is idempotent so redelivered messages are harmless.</summary>
+public enum CancelJobResult { Canceled, NotFound, AlreadyFinished }
+
+/// <summary>Job and page state changes. Every write is idempotent so redelivered messages are harmless.</summary>
 public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
 {
+    public const string CanceledReason = "Job canceled";
+
     public Task<CrawlJob?> GetJobAsync(Guid jobId, CancellationToken ct) =>
         db.Jobs.AsNoTracking().FirstOrDefaultAsync(j => j.Id == jobId, ct);
 
@@ -89,12 +93,12 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
             var now = clock.GetUtcNow();
 
             // Job row lock serializes saves per job: page-limit and completion checks can't race.
-            var lockedRows = await db.Database.SqlQuery<int>(
-                $"""SELECT reserved_page_count AS "Value" FROM crawl_jobs WHERE id = {job.Id} FOR UPDATE""")
+            var locked = await db.Database.SqlQuery<LockedJob>(
+                $"""SELECT reserved_page_count AS reserved, status AS status FROM crawl_jobs WHERE id = {job.Id} FOR UPDATE""")
                 .ToListAsync(ct);
-            if (lockedRows.Count == 0)
+            if (locked.Count == 0 || locked[0].Status is not (nameof(CrawlJobStatus.Pending) or nameof(CrawlJobStatus.Running)))
             {
-                // Job was deleted meanwhile; nothing to save.
+                // Deleted, canceled or timed out meanwhile: don't add new Pending pages to a finished job.
                 return (IReadOnlyList<QueuedPage>)[];
             }
 
@@ -104,7 +108,7 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
             }
 
             var knownUrls = await GetSlottedUrlsAsync(job.Id, links, childDepth, ct);
-            var (limitedLinks, reserved) = PageLimit.Apply(links, knownUrls, job.MaxPages - lockedRows[0]);
+            var (limitedLinks, reserved) = PageLimit.Apply(links, knownUrls, job.MaxPages - locked[0].Reserved);
 
             if (reserved > 0)
             {
@@ -128,6 +132,46 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
 
             await tx.CommitAsync(ct);
             return queued;
+        });
+    }
+
+    /// <summary>Cancels a Pending or Running job and skips its pending pages; queued messages are then ignored.</summary>
+    public Task<CancelJobResult> CancelJobAsync(Guid jobId, CancellationToken ct)
+    {
+        var strategy = db.Database.CreateExecutionStrategy();
+        return strategy.ExecuteAsync(async () =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+            // Same job-row lock as SaveResultAsync: an in-flight save finishes first, later ones see Canceled.
+            var statuses = await db.Database.SqlQuery<string>(
+                $"""SELECT status AS "Value" FROM crawl_jobs WHERE id = {jobId} FOR UPDATE""")
+                .ToListAsync(ct);
+            if (statuses.Count == 0)
+            {
+                return CancelJobResult.NotFound;
+            }
+
+            if (statuses[0] is not (nameof(CrawlJobStatus.Pending) or nameof(CrawlJobStatus.Running)))
+            {
+                return CancelJobResult.AlreadyFinished;
+            }
+
+            await db.Pages
+                .Where(p => p.JobId == jobId && p.Status == CrawlPageStatus.Pending)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(p => p.Status, CrawlPageStatus.Skipped)
+                    .SetProperty(p => p.StatusReason, CanceledReason), ct);
+
+            var now = clock.GetUtcNow();
+            await db.Jobs
+                .Where(j => j.Id == jobId)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(j => j.Status, CrawlJobStatus.Canceled)
+                    .SetProperty(j => j.CompletedAt, now), ct);
+
+            await tx.CommitAsync(ct);
+            return CancelJobResult.Canceled;
         });
     }
 
@@ -243,6 +287,12 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
     }
 
     // Single-word columns so the raw SQL maps regardless of naming convention.
+    private class LockedJob
+    {
+        public int Reserved { get; set; }
+        public string Status { get; set; } = "";
+    }
+
     private class UpsertedPage
     {
         public long Id { get; set; }

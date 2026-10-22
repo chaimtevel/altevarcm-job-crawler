@@ -100,6 +100,14 @@ public class CrawlPageHandler(
         }
 
         var startHost = new Uri(job.Url).Host;
+        if (!DomainLinkRatio.IsWithinDomain(fetch.FinalUrl!.Host, startHost))
+        {
+            // e.g. /login → an outside auth service: not part of this site, so no ratio or links.
+            var reason = $"Redirects off-site to {fetch.FinalUrl}";
+            var status = page.Depth == 0 ? CrawlPageStatus.Failed : CrawlPageStatus.Skipped;
+            return (new PageOutcome(status, fetch.HttpStatusCode, null, null, reason), [], null);
+        }
+
         var urls = HtmlLinkExtractor.ExtractLinks(fetch.Html!, fetch.FinalUrl!);
         var ratio = DomainLinkRatio.Calculate(urls, startHost);
         var links = urls.Select(url => Classify(url, startHost, page.Depth + 1, job.MaxDepth)).ToList();

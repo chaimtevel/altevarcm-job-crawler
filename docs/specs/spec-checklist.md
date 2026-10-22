@@ -18,13 +18,13 @@ How each requirement in `Technical Assessment.pdf` is met. Details are in the ro
 | Requirement | How it's met |
 |---|---|
 | jobId (GUID), input URL | `CrawlJob` has a `Guid Id` and the normalized input `Url`, validated as an absolute http(s) URL. |
-| Status Pending/Running/Completed/Failed/Canceled | `CrawlJobStatus` enum has all five values, stored as strings; Canceled exists but no endpoint sets it. |
+| Status Pending/Running/Completed/Failed/Canceled | `CrawlJobStatus` enum has all five values, stored as strings; Canceled is set by the cancel endpoint. |
 | Timestamps created/started/completed, failure reason | `CreatedAt`, `StartedAt`, `CompletedAt` and `FailureReason` columns, set by the API, worker and timeout sweep. |
 | Create job `{ url, maxDepth? = 2 }` → `{ jobId }` | `POST /api/jobs` validates the URL and depth (0–5, default 2), returns `201 { jobId }`. |
 | Read job status and summary | `GET /api/jobs/{id}` returns status, timestamps, failure reason and crawled/failed/skipped/pending page counts. |
 | Read hierarchical tree | `GET /api/jobs/{id}/tree` returns nested nodes built from each page's discovering parent. |
 | History, paginated, most recent first | `GET /api/jobs?page=&pageSize=` orders by `created_at DESC`, backed by an index on that column. |
-| Cancel a job (optional) | Not built; the status exists, the endpoint and worker check were cut for time. |
+| Cancel a job (optional) | `POST /api/jobs/{id}/cancel` and a Cancel button; pending pages are skipped, queued messages ignored. |
 
 ## Crawling rules
 

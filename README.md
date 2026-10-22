@@ -145,6 +145,8 @@ than 15 minutes → `Failed: Timed out after 15 minutes`), so no job stays `Runn
   `https → http`, which `HttpClient` would refuse but some sites use (e.g. quotes.toscrape.com). The page is crawled
   as its final URL; a redirect isn't a depth level. Loops end as `Failed: Too many redirects`. The final URL is
   stored as `Skipped: Same page as …`, so links to it (e.g. `example.com` → `www.example.com/`) aren't crawled twice.
+  A link that redirects to another site (e.g. `/login` → an auth provider) is `Skipped: Redirects off-site to …`
+  with no ratio or links; if the start URL does that, the job fails.
 - **Input URL:** a missing scheme defaults to `https://` (`example.com` → `https://example.com/`).
 - **SSRF guard:** loopback, private, link-local (incl. cloud metadata) and reserved addresses are rejected at the
   API and blocked at connect time in the worker, which also covers DNS names and redirects.
@@ -159,6 +161,7 @@ than 15 minutes → `Failed: Timed out after 15 minutes`), so no job stays `Runn
 | GET | `/api/jobs/{jobId}/tree` | nested tree of crawled/reserved pages (by first discoverer) |
 | GET | `/api/jobs/{jobId}/pages/{pageId}/links` | a page's outgoing links (incl. skipped/external) |
 | GET | `/api/jobs?page=1&pageSize=20` | history, most recent first |
+| POST | `/api/jobs/{jobId}/cancel` | `204`; pending pages become `Skipped: Job canceled`; `409` if already finished |
 
 ## Observability
 
@@ -176,12 +179,11 @@ The UI came after the backend was correct end to end.
 
 **Cut (and why):**
 - **Authentication / user accounts** – not in the spec's flows or rubric; would have consumed the time budget.
-- **Cancel job** (optional) – the `Canceled` status exists; the endpoint and worker check were lower value.
 - SSE/SignalR (polling is enough), robots.txt and rate limiting.
 
 **Next, with more time:**
 1. Transactional outbox for the API's first publish (today a broker outage marks the job `Failed` with HTTP 503).
-2. Cancel endpoint; per-host politeness (robots.txt, rate limit, concurrency cap).
+2. Per-host politeness (robots.txt, rate limit, concurrency cap).
 3. Testcontainers-based tests for `CrawlStore` SQL and the full message flow, run in CI; Docker image builds in CI.
 4. Auth if the system becomes multi-user.
 
@@ -189,7 +191,9 @@ The UI came after the backend was correct end to end.
 
 - No authentication; Swagger is enabled in every environment (demo).
 - Credentials in `.env` are for local/demo use only; a real deployment would use a secret manager.
-- No robots.txt or per-host rate limiting; up to ~10 pages fetched in parallel (RabbitMQ prefetch).
+- No robots.txt or per-host rate limiting; up to ~10 pages fetched in parallel (RabbitMQ prefetch). Sites with bot
+  protection (e.g. Cloudflare) or rate limits may answer the honest `CrawlerBot/1.0` user agent with 403/429,
+  which show up as Failed pages.
 - A page already crawled via a deeper path is not re-crawled if a shorter path appears later.
 - Blocked (private-address) hosts are retried twice by the HTTP policy before failing.
 - The tree shows crawled/reserved pages only; skipped links are listed per page via its "N links" button.

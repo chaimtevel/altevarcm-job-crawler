@@ -92,6 +92,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(message, response.status, problem?.errors ?? {});
   }
 
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
   return response.json() as Promise<T>;
 }
 
@@ -99,6 +103,7 @@ export const api = {
   createJob: (url: string, maxDepth?: number) =>
     request<{ jobId: string }>('/jobs', { method: 'POST', body: JSON.stringify({ url, maxDepth }) }),
   getJob: (jobId: string) => request<JobDetails>(`/jobs/${jobId}`),
+  cancelJob: (jobId: string) => request<void>(`/jobs/${jobId}/cancel`, { method: 'POST' }),
   getTree: (jobId: string) => request<JobTree>(`/jobs/${jobId}/tree`),
   getPageLinks: (jobId: string, pageId: number) => request<PageLink[]>(`/jobs/${jobId}/pages/${pageId}/links`),
   listJobs: (page: number, pageSize: number) =>
