@@ -20,7 +20,7 @@ export function HistoryPage() {
   const navigate = useNavigate();
   // The page lives in the URL (?page=3) so Back from a job returns to it.
   const [searchParams, setSearchParams] = useSearchParams();
-  const page = Math.max(1, Number(searchParams.get('page')) || 1);
+  const page = Math.max(1, Math.floor(Number(searchParams.get('page'))) || 1);
   const search = searchParams.get('q') ?? '';
 
   // Controlled box, synced from ?q= (Back, menu link) without remounting, so it keeps focus.

@@ -32,6 +32,15 @@ public class QueuedPage
     public int Depth { get; set; }
 }
 
+public static class StatusReasons
+{
+    /// <summary>Matches the varchar(2000) reason columns; reasons can embed URLs up to 2,048 characters.</summary>
+    public const int MaxLength = 2000;
+
+    public static string? Fit(string? reason) =>
+        reason is { Length: > MaxLength } ? reason[..(MaxLength - 1)] + "…" : reason;
+}
+
 public static class SkipReasons
 {
     public const string External = "External link";

@@ -117,7 +117,7 @@ public class CrawlPageHandler(
         var outcome = new PageOutcome(CrawlPageStatus.Crawled, fetch.HttpStatusCode, ratio, urls.Count, null);
 
         // Sitemaps are read once per job, from the start page, and queued alongside its links.
-        var sitemapLinks = page.Depth == 0
+        var sitemapLinks = page.Depth == 0 && job.MaxDepth > 0
             ? await ReadSitemapLinksAsync(job, page, fetch.FinalUrl!, links, startHost, ct)
             : [];
 

@@ -100,3 +100,5 @@ Delivery is at-least-once; duplicates are harmless because of:
 - JavaScript isn't run: links added after page load are found only if the sitemap lists them.
 - No rate limiting (about 10 pages in parallel), so bot protection may answer with 403/429 (shown as Failed).
 - A page already crawled isn't re-crawled when a shorter path to it turns up later.
+- If a worker crashes mid-page, the redelivery can arrive while its 2-minute claim is still held and is dropped,
+  so that page waits for the job timeout. Fix: a sweep that republishes stale Pending pages.

@@ -11,6 +11,9 @@ using Polly;
 // The Dapr sidecar delivers pub/sub messages to the worker over HTTP, so it is an ASP.NET Core app.
 var builder = WebApplication.CreateBuilder(args);
 
+// Lets pages declared as windows-1252, Shift_JIS etc. decode correctly instead of falling back to UTF-8.
+System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+
 builder.Services.AddCrawlerPersistence(builder.Configuration);
 builder.Services.AddDaprClient();
 builder.Services.AddHealthChecks()
@@ -36,6 +39,8 @@ builder.Services
     {
         // PageFetcher follows redirects itself, so one hop limit covers every case.
         AllowAutoRedirect = false,
+        // An environment proxy would make ConnectCallback check the proxy, not the target (SSRF bypass).
+        UseProxy = false,
         PooledConnectionLifetime = TimeSpan.FromMinutes(2),
         ConnectCallback = allowPrivateNetworks ? null : PublicNetworkConnector.ConnectAsync,
     })

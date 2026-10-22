@@ -132,8 +132,13 @@ public static class JobEndpoints
         CrawlerDbContext db,
         JobProgressNotifications notifications,
         IOptions<JsonOptions> json,
-        CancellationToken ct)
+        IHostApplicationLifetime lifetime,
+        CancellationToken requestAborted)
     {
+        // End on browser disconnect or API shutdown, so open streams don't delay a restart.
+        using var stopping = CancellationTokenSource.CreateLinkedTokenSource(requestAborted, lifetime.ApplicationStopping);
+        var ct = stopping.Token;
+
         // Subscribe before the first read, so a change in between isn't missed.
         using var subscription = notifications.Subscribe(jobId);
 
@@ -175,7 +180,7 @@ public static class JobEndpoints
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // The browser closed the stream.
+            // The browser closed the stream, or the API is shutting down.
         }
     }
 
@@ -228,7 +233,9 @@ public static class JobEndpoints
         var jobs = db.Jobs.AsNoTracking();
         if (!string.IsNullOrWhiteSpace(search))
         {
-            jobs = jobs.Where(j => EF.Functions.ILike(j.Url, $"%{search.Trim()}%"));
+            // Escape LIKE wildcards so "_" and "%" in the box match literally.
+            var term = search.Trim().Replace(@"\", @"\\").Replace("%", @"\%").Replace("_", @"\_");
+            jobs = jobs.Where(j => EF.Functions.ILike(j.Url, $"%{term}%", @"\"));
         }
 
         var totalCount = await jobs.CountAsync(ct);

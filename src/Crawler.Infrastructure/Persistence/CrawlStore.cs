@@ -253,7 +253,7 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
         Guid jobId, CrawlPage page, DiscoveredLink target, DateTimeOffset now, CancellationToken ct) =>
         db.Database.ExecuteSqlInterpolatedAsync($"""
             INSERT INTO crawl_pages AS p (job_id, url, depth, discovered_by_page_id, is_internal, status, status_reason, discovered_at)
-            VALUES ({jobId}, {target.Url}, {page.Depth}, {page.Id}, {target.IsInternal}, {target.Status.ToString()}, {target.StatusReason}, {now})
+            VALUES ({jobId}, {target.Url}, {page.Depth}, {page.Id}, {target.IsInternal}, {target.Status.ToString()}, {StatusReasons.Fit(target.StatusReason)}, {now})
             ON CONFLICT (job_id, url) DO UPDATE SET
                 status = EXCLUDED.status,
                 status_reason = EXCLUDED.status_reason
@@ -352,7 +352,7 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
             .Where(p => p.Id == pageId && p.Status == CrawlPageStatus.Pending)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(p => p.Status, outcome.Status)
-                .SetProperty(p => p.StatusReason, outcome.StatusReason)
+                .SetProperty(p => p.StatusReason, StatusReasons.Fit(outcome.StatusReason))
                 .SetProperty(p => p.HttpStatusCode, outcome.HttpStatusCode)
                 .SetProperty(p => p.DomainLinkRatio, outcome.DomainLinkRatio)
                 .SetProperty(p => p.OutgoingLinkCount, outcome.OutgoingLinkCount)
@@ -372,6 +372,6 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
             .Where(j => j.Id == jobId && (j.Status == CrawlJobStatus.Pending || j.Status == CrawlJobStatus.Running))
             .ExecuteUpdateAsync(s => s
                 .SetProperty(j => j.Status, CrawlJobStatus.Failed)
-                .SetProperty(j => j.FailureReason, reason)
+                .SetProperty(j => j.FailureReason, StatusReasons.Fit(reason))
                 .SetProperty(j => j.CompletedAt, now), ct);
 }
