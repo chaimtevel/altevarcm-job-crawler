@@ -74,8 +74,13 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
     /// then completes the job if nothing is pending. Returns the children that now need a crawl message.
     /// </summary>
     public Task<IReadOnlyList<QueuedPage>> SaveResultAsync(
-        CrawlJob job, CrawlPage page, PageOutcome outcome, IReadOnlyList<DiscoveredLink> links, CancellationToken ct)
+        CrawlJob job,
+        CrawlPage page,
+        PageOutcome outcome,
+        IReadOnlyList<DiscoveredLink> links,
+        CancellationToken ct)
     {
+        var childDepth = page.Depth + 1;
         var strategy = db.Database.CreateExecutionStrategy();
         return strategy.ExecuteAsync(async () =>
         {
@@ -92,7 +97,6 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
                 return (IReadOnlyList<QueuedPage>)[];
             }
 
-            var childDepth = page.Depth + 1;
             var knownUrls = await GetSlottedUrlsAsync(job.Id, links, childDepth, ct);
             var (limitedLinks, reserved) = PageLimit.Apply(links, knownUrls, job.MaxPages - lockedRows[0]);
 
@@ -103,7 +107,7 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
                     .ExecuteUpdateAsync(s => s.SetProperty(j => j.ReservedPageCount, j => j.ReservedPageCount + reserved), ct);
             }
 
-            var queued = await UpsertChildPagesAsync(job.Id, page, limitedLinks, now, ct);
+            var queued = await UpsertChildPagesAsync(job.Id, page.Id, childDepth, limitedLinks, now, ct);
             await InsertLinksAsync(job.Id, page.Id, limitedLinks, ct);
             await UpdatePageAsync(page.Id, outcome, now, ct);
 
@@ -184,7 +188,7 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
     /// depth and this parent; if it was skipped as beyond max depth it gets this link's status.
     /// </summary>
     private async Task<IReadOnlyList<QueuedPage>> UpsertChildPagesAsync(
-        Guid jobId, CrawlPage parent, IReadOnlyList<DiscoveredLink> links, DateTimeOffset now, CancellationToken ct)
+        Guid jobId, long parentId, int depth, IReadOnlyList<DiscoveredLink> links, DateTimeOffset now, CancellationToken ct)
     {
         if (links.Count == 0)
         {
@@ -195,11 +199,10 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
         var internals = links.Select(l => l.IsInternal).ToArray();
         var statuses = links.Select(l => l.Status.ToString()).ToArray();
         var reasons = links.Select(l => l.StatusReason).ToArray();
-        var depth = parent.Depth + 1;
 
         var rows = await db.Database.SqlQuery<UpsertedPage>($"""
             INSERT INTO crawl_pages AS p (job_id, url, depth, discovered_by_page_id, is_internal, status, status_reason, discovered_at)
-            SELECT {jobId}, c.url, {depth}, {parent.Id}, c.is_internal, c.status, c.reason, {now}
+            SELECT {jobId}, c.url, {depth}, {parentId}, c.is_internal, c.status, c.reason, {now}
             FROM unnest({urls}, {internals}, {statuses}, {reasons}) AS c(url, is_internal, status, reason)
             ON CONFLICT (job_id, url) DO UPDATE SET
                 depth = EXCLUDED.depth,

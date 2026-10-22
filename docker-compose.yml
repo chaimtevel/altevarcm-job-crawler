@@ -38,6 +38,9 @@ services:
       dockerfile: src/Crawler.Api/Dockerfile
     environment:
       ConnectionStrings__Crawler: "Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
+      DAPR_HTTP_ENDPOINT: "http://api-dapr:3500"
+      DAPR_GRPC_ENDPOINT: "http://api-dapr:50001"
+      DAPR_API_TOKEN: ${DAPR_API_TOKEN:?set in .env}
     ports:
       - "5080:8080"
     depends_on:
@@ -46,20 +49,23 @@ services:
       rabbitmq:
         condition: service_healthy
 
-  # Dapr sidecars share their app's network namespace, so the app reaches Dapr on localhost:3500/50001.
+  # Sidecars run on the normal network, so any service can be rebuilt on its own.
+  # DAPR_API_TOKEN: apps → sidecar. APP_API_TOKEN: sidecar → worker message endpoint.
   api-dapr:
     image: daprio/daprd:1.18.9
     command:
       - ./daprd
       - --app-id=crawl-api
       - --app-port=8080
+      - --app-channel-address=api
+      - --dapr-listen-addresses=0.0.0.0
       - --resources-path=/dapr/components
       - --config=/dapr/config.yaml
     environment:
       RABBITMQ_CONNECTION_STRING: "amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672"
+      DAPR_API_TOKEN: ${DAPR_API_TOKEN:?set in .env}
     volumes:
       - ./dapr:/dapr:ro
-    network_mode: "service:api"
     restart: on-failure
     depends_on:
       api:
@@ -73,6 +79,10 @@ services:
       dockerfile: src/Crawler.Worker/Dockerfile
     environment:
       ConnectionStrings__Crawler: "Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
+      DAPR_HTTP_ENDPOINT: "http://worker-dapr:3500"
+      DAPR_GRPC_ENDPOINT: "http://worker-dapr:50001"
+      DAPR_API_TOKEN: ${DAPR_API_TOKEN:?set in .env}
+      APP_API_TOKEN: ${APP_API_TOKEN:?set in .env}
     ports:
       - "5081:8080"
     depends_on:
@@ -87,13 +97,16 @@ services:
       - ./daprd
       - --app-id=crawl-worker
       - --app-port=8080
+      - --app-channel-address=worker
+      - --dapr-listen-addresses=0.0.0.0
       - --resources-path=/dapr/components
       - --config=/dapr/config.yaml
     environment:
       RABBITMQ_CONNECTION_STRING: "amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672"
+      DAPR_API_TOKEN: ${DAPR_API_TOKEN:?set in .env}
+      APP_API_TOKEN: ${APP_API_TOKEN:?set in .env}
     volumes:
       - ./dapr:/dapr:ro
-    network_mode: "service:worker"
     restart: on-failure
     depends_on:
       worker:

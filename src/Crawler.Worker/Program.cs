@@ -1,5 +1,7 @@
 using Crawler.Infrastructure.Messaging;
 using HealthChecks.UI.Client;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Crawler.Infrastructure.Persistence;
 using Crawler.Worker.Crawling;
@@ -20,6 +22,11 @@ builder.Services.AddScoped<CrawlPagePublisher>();
 builder.Services.AddScoped<CrawlPageHandler>();
 builder.Services.AddHostedService<JobTimeoutService>();
 
+// Message endpoints accept only calls carrying the sidecar's APP_API_TOKEN.
+const string DaprPolicy = "Dapr";
+builder.Services.AddAuthentication().AddDapr();
+builder.Services.AddAuthorization(options => options.AddDapr(DaprPolicy));
+
 // Only for tests against local fixtures; never enable in a deployed environment.
 var allowPrivateNetworks = builder.Configuration.GetValue<bool>("Crawl:AllowPrivateNetworks");
 
@@ -27,7 +34,8 @@ builder.Services
     .AddHttpClient<PageFetcher>(client => client.DefaultRequestHeaders.UserAgent.ParseAdd("CrawlerBot/1.0"))
     .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
     {
-        MaxAutomaticRedirections = 5,
+        // PageFetcher follows redirects itself, so one hop limit covers every case.
+        AllowAutoRedirect = false,
         PooledConnectionLifetime = TimeSpan.FromMinutes(2),
         ConnectCallback = allowPrivateNetworks ? null : PublicNetworkConnector.ConnectAsync,
     })
@@ -49,6 +57,8 @@ var app = builder.Build();
 
 // Unwraps CloudEvents envelopes and exposes /dapr/subscribe for topic-bound endpoints.
 app.UseCloudEvents();
+app.UseAuthentication();
+app.UseAuthorization();
 app.MapSubscribeHandler();
 
 app.MapPost("/messages/crawl-page", async (CrawlPageMessage message, CrawlPageHandler handler, CancellationToken ct) =>
@@ -56,7 +66,8 @@ app.MapPost("/messages/crawl-page", async (CrawlPageMessage message, CrawlPageHa
         await handler.HandleAsync(message, ct);
         return Results.Ok();
     })
-    .WithTopic(CrawlMessaging.PubSubName, CrawlMessaging.CrawlPageTopic);
+    .WithTopic(CrawlMessaging.PubSubName, CrawlMessaging.CrawlPageTopic)
+    .RequireAuthorization(DaprPolicy);
 
 app.MapHealthChecks("/health", new HealthCheckOptions { ResponseWriter = UIResponseWriter.WriteHealthCheckUIResponse });
 

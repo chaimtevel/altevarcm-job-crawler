@@ -1,4 +1,5 @@
 using System.Text;
+using Crawler.Domain.Crawling;
 using Polly.Timeout;
 
 namespace Crawler.Worker.Crawling;
@@ -12,6 +13,9 @@ public class PageFetcher(HttpClient http)
 {
     private const int MaxContentBytes = 5 * 1024 * 1024;
 
+    /// <summary>Auto-redirect is off, so this one limit covers every hop, including https→http.</summary>
+    private const int MaxRedirects = 5;
+
     /// <summary>Covers headers and body; the resilience pipeline alone only covers the headers.</summary>
     private static readonly TimeSpan TotalTimeout = TimeSpan.FromSeconds(30);
 
@@ -22,22 +26,30 @@ public class PageFetcher(HttpClient http)
 
         try
         {
-            using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
-            var status = (int)response.StatusCode;
+            var current = url;
+            for (var hop = 0; ; hop++)
+            {
+                using var response = await http.GetAsync(current, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+                var status = (int)response.StatusCode;
 
-            if (!response.IsSuccessStatusCode)
-                return new(FetchStatus.Failed, status, null, null, $"HTTP {status}");
+                if (status is < 300 or >= 400 || response.Headers.Location is not { } location)
+                {
+                    return await ReadResponseAsync(response, current, timeout.Token);
+                }
 
-            var mediaType = response.Content.Headers.ContentType?.MediaType;
-            if (!IsHtml(mediaType))
-                return new(FetchStatus.NotHtml, status, null, null, $"Not HTML ({mediaType ?? "unknown type"})");
+                if (hop >= MaxRedirects)
+                {
+                    return new(FetchStatus.Failed, status, null, null, "Too many redirects");
+                }
 
-            var html = await ReadLimitedAsync(response.Content, timeout.Token);
-            if (html is null)
-                return new(FetchStatus.Failed, status, null, null, "Page larger than 5 MB");
+                if (!Uri.TryCreate(response.RequestMessage?.RequestUri ?? current, location, out var next)
+                    || !UrlNormalizer.IsHttp(next))
+                {
+                    return new(FetchStatus.Failed, status, null, null, $"Redirects to unsupported URL {location}");
+                }
 
-            // After redirects, relative links resolve against the final URL.
-            return new(FetchStatus.Html, status, html, response.RequestMessage?.RequestUri ?? url, null);
+                current = next;
+            }
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException)
         {
@@ -47,6 +59,30 @@ public class PageFetcher(HttpClient http)
         {
             return new(FetchStatus.Failed, null, null, null, "Timed out");
         }
+    }
+
+    private static async Task<FetchResult> ReadResponseAsync(HttpResponseMessage response, Uri requested, CancellationToken ct)
+    {
+        var status = (int)response.StatusCode;
+        if (!response.IsSuccessStatusCode)
+        {
+            return new(FetchStatus.Failed, status, null, null, $"HTTP {status}");
+        }
+
+        var mediaType = response.Content.Headers.ContentType?.MediaType;
+        if (!IsHtml(mediaType))
+        {
+            return new(FetchStatus.NotHtml, status, null, null, $"Not HTML ({mediaType ?? "unknown type"})");
+        }
+
+        var html = await ReadLimitedAsync(response.Content, ct);
+        if (html is null)
+        {
+            return new(FetchStatus.Failed, status, null, null, "Page larger than 5 MB");
+        }
+
+        // After redirects, relative links resolve against the final URL.
+        return new(FetchStatus.Html, status, html, response.RequestMessage?.RequestUri ?? requested, null);
     }
 
     private static bool IsHtml(string? mediaType) =>
@@ -62,7 +98,10 @@ public class PageFetcher(HttpClient http)
         while ((read = await stream.ReadAsync(chunk, ct)) > 0)
         {
             if (buffer.Length + read > MaxContentBytes)
+            {
                 return null;
+            }
+
             buffer.Write(chunk, 0, read);
         }
 

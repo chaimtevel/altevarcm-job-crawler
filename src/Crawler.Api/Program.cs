@@ -9,7 +9,7 @@ using Microsoft.EntityFrameworkCore;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddCrawlerPersistence(builder.Configuration);
-// Publishes to the broker through the Dapr sidecar (localhost:3500/50001).
+// Publishes through the Dapr sidecar at DAPR_HTTP_ENDPOINT/DAPR_GRPC_ENDPOINT (localhost when unset).
 builder.Services.AddDaprClient();
 builder.Services.AddScoped<CrawlPagePublisher>();
 builder.Services.AddHealthChecks()
@@ -33,11 +33,18 @@ await using (var scope = app.Services.CreateAsyncScope())
 app.UseExceptionHandler();
 app.UseStatusCodePages();
 
+// Serves the built React UI from wwwroot (copied in by the Docker build).
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
 // Swagger is enabled in every environment because this is a demo/assessment service.
 app.UseSwagger();
 app.UseSwaggerUI();
 
 app.MapHealthChecks("/health", new HealthCheckOptions { ResponseWriter = UIResponseWriter.WriteHealthCheckUIResponse });
 app.MapJobEndpoints();
+// Client-side routes (/jobs/..., /history) load the SPA on GET; files and /api routes don't.
+app.MapFallbackToFile("{*path:nonfile:regex(^(?!api(/|$)).*$)}", "index.html")
+    .WithMetadata(new HttpMethodMetadata(["GET", "HEAD"]));
 
 app.Run();
