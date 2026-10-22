@@ -1,0 +1,12 @@
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: crawler-config
+spec:
+  tracing:
+    samplingRate: "1"
+  # Apps may not read any sidecar env var through the secrets API; components still resolve their refs.
+  secrets:
+    scopes:
+      - storeName: env-secrets
+        defaultAccess: deny

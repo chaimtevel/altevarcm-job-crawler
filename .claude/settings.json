@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(docker compose up *)",
+      "PowerShell(dotnet package search *)"
+    ]
+  }
+}

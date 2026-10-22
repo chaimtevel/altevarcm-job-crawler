@@ -1,0 +1,31 @@
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: crawl-pubsub
+spec:
+  type: pubsub.rabbitmq
+  version: v1
+  metadata:
+    - name: connectionString
+      secretKeyRef:
+        name: RABBITMQ_CONNECTION_STRING
+        key: RABBITMQ_CONNECTION_STRING
+    - name: durable
+      value: "true"
+    - name: deletedWhenUnused
+      value: "false"
+    - name: autoAck
+      value: "false"
+    - name: deliveryMode
+      value: "2" # persistent messages
+    - name: requeueInFailure
+      value: "false" # failed messages go to the dead-letter exchange instead of looping
+    - name: enableDeadLetter
+      value: "true"
+    - name: prefetchCount
+      value: "10"
+auth:
+  secretStore: env-secrets
+scopes:
+  - crawl-api
+  - crawl-worker

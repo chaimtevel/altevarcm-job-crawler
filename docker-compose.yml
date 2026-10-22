@@ -1,0 +1,105 @@
+# Credentials come from .env (gitignored). Copy .env.example to .env first.
+# Demo/local setup only; a real deployment would use a secret manager.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?set in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?set in .env}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?set in .env}
+    ports:
+      - "5672:5672"   # AMQP
+      - "15672:15672" # Management UI: http://localhost:15672
+    healthcheck:
+      # `ping` passes before the AMQP listener is up; this waits until clients can actually connect.
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: src/Crawler.Api/Dockerfile
+    environment:
+      ConnectionStrings__Crawler: "Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
+    ports:
+      - "5080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  # Dapr sidecars share their app's network namespace, so the app reaches Dapr on localhost:3500/50001.
+  api-dapr:
+    image: daprio/daprd:1.18.9
+    command:
+      - ./daprd
+      - --app-id=crawl-api
+      - --app-port=8080
+      - --resources-path=/dapr/components
+      - --config=/dapr/config.yaml
+    environment:
+      RABBITMQ_CONNECTION_STRING: "amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672"
+    volumes:
+      - ./dapr:/dapr:ro
+    network_mode: "service:api"
+    restart: on-failure
+    depends_on:
+      api:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: src/Crawler.Worker/Dockerfile
+    environment:
+      ConnectionStrings__Crawler: "Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
+    ports:
+      - "5081:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  worker-dapr:
+    image: daprio/daprd:1.18.9
+    command:
+      - ./daprd
+      - --app-id=crawl-worker
+      - --app-port=8080
+      - --resources-path=/dapr/components
+      - --config=/dapr/config.yaml
+    environment:
+      RABBITMQ_CONNECTION_STRING: "amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672"
+    volumes:
+      - ./dapr:/dapr:ro
+    network_mode: "service:worker"
+    restart: on-failure
+    depends_on:
+      worker:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  postgres-data:

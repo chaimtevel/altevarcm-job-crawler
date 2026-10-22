@@ -1,0 +1,23 @@
+# Retries failed deliveries before RabbitMQ dead-letters them (requeueInFailure=false).
+apiVersion: dapr.io/v1alpha1
+kind: Resiliency
+metadata:
+  name: crawler-resiliency
+scopes:
+  - crawl-api
+  - crawl-worker
+spec:
+  policies:
+    retries:
+      # Exponential backoff from 500ms, capped at 30s; ~1 minute in total.
+      pubsubRetry:
+        policy: exponential
+        maxInterval: 30s
+        maxRetries: 5
+  targets:
+    components:
+      crawl-pubsub:
+        inbound:
+          retry: pubsubRetry
+        outbound:
+          retry: pubsubRetry

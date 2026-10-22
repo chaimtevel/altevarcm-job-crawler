@@ -1,0 +1,11 @@
+**/bin/
+**/obj/
+**/node_modules/
+**/.vs/
+**/.vscode/
+**/*.user
+**/appsettings.Development.json
+**/Properties/launchSettings.json
+.env
+.git/
+*.pdf
