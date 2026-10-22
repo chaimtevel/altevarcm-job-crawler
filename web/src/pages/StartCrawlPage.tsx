@@ -1,18 +1,21 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Card, Form, Input, InputNumber, List, Typography } from 'antd';
 import { api, ApiError, DEFAULT_MAX_DEPTH, formatDate, isLinkClick, MAX_DEPTH, MAX_PAGES, pollWhileAnyActive } from '../api';
 import { StatusBadge } from '../components/StatusBadge';
 
 export function StartCrawlPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [url, setUrl] = useState('');
   const [maxDepth, setMaxDepth] = useState<number | null>(null);
 
   const createJob = useMutation({
     mutationFn: () => api.createJob(url.trim(), maxDepth ?? undefined),
     onSuccess: ({ jobId }) => navigate(`/jobs/${jobId}`),
+    // A 503 still saves the job as Failed, so refresh the lists either way.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
   });
 
   const recent = useQuery({

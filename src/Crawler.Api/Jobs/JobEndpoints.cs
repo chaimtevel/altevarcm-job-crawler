@@ -1,9 +1,12 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Crawler.Domain.Jobs;
 using Crawler.Infrastructure.Messaging;
 using Crawler.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using JsonOptions = Microsoft.AspNetCore.Http.Json.JsonOptions;
 
 namespace Crawler.Api.Jobs;
 
@@ -19,6 +22,7 @@ public static class JobEndpoints
 
         jobs.MapPost("/", CreateJob).WithName(nameof(CreateJob));
         jobs.MapGet("/{jobId:guid}", GetJob).WithName(nameof(GetJob));
+        jobs.MapGet("/{jobId:guid}/events", StreamJobEvents).WithName(nameof(StreamJobEvents)).Produces(200, contentType: "text/event-stream");
         jobs.MapGet("/", ListJobs).WithName(nameof(ListJobs));
         jobs.MapGet("/{jobId:guid}/tree", GetJobTree).WithName(nameof(GetJobTree));
         jobs.MapGet("/{jobId:guid}/pages/{pageId:long}/links", GetPageLinks).WithName(nameof(GetPageLinks));
@@ -111,10 +115,76 @@ public static class JobEndpoints
         CrawlerDbContext db,
         CancellationToken ct)
     {
+        var details = await LoadJobDetailsAsync(db, jobId, ct);
+        return details is null ? TypedResults.NotFound() : TypedResults.Ok(details);
+    }
+
+    private static readonly TimeSpan KeepAliveInterval = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan MinPushInterval = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
+    /// Server-Sent Events: pushes the job details on connect and after each change the worker reports
+    /// through Postgres NOTIFY. A keep-alive also refreshes, covering a missed notification. Ends when the job finishes.
+    /// </summary>
+    private static async Task StreamJobEvents(
+        Guid jobId,
+        HttpContext http,
+        CrawlerDbContext db,
+        JobProgressNotifications notifications,
+        IOptions<JsonOptions> json,
+        CancellationToken ct)
+    {
+        // Subscribe before the first read, so a change in between isn't missed.
+        using var subscription = notifications.Subscribe(jobId);
+
+        var details = await LoadJobDetailsAsync(db, jobId, ct);
+        if (details is null)
+        {
+            http.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+
+        http.Response.ContentType = "text/event-stream";
+        http.Response.Headers.CacheControl = "no-cache";
+
+        try
+        {
+            while (true)
+            {
+                var payload = JsonSerializer.Serialize(details, json.Value.SerializerOptions);
+                await http.Response.WriteAsync($"data: {payload}\n\n", ct);
+                await http.Response.Body.FlushAsync(ct);
+
+                if (!details.Status.IsActive())
+                {
+                    return;
+                }
+
+                if (await subscription.WaitAsync(KeepAliveInterval, ct))
+                {
+                    // Batch the burst of page saves into at most two pushes per second.
+                    await Task.Delay(MinPushInterval, ct);
+                }
+
+                details = await LoadJobDetailsAsync(db, jobId, ct);
+                if (details is null)
+                {
+                    return;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // The browser closed the stream.
+        }
+    }
+
+    private static async Task<JobDetailsResponse?> LoadJobDetailsAsync(CrawlerDbContext db, Guid jobId, CancellationToken ct)
+    {
         var job = await db.Jobs.AsNoTracking().FirstOrDefaultAsync(j => j.Id == jobId, ct);
         if (job is null)
         {
-            return TypedResults.NotFound();
+            return null;
         }
 
         // One GROUP BY over the (job_id, status) index instead of loading pages.
@@ -133,16 +203,17 @@ public static class JobEndpoints
             Failed: Count(CrawlPageStatus.Failed),
             Skipped: Count(CrawlPageStatus.Skipped));
 
-        return TypedResults.Ok(new JobDetailsResponse(
+        return new JobDetailsResponse(
             job.Id, job.Url, job.MaxDepth, job.MaxPages, job.Status,
-            job.CreatedAt, job.StartedAt, job.CompletedAt, job.FailureReason, progress));
+            job.CreatedAt, job.StartedAt, job.CompletedAt, job.FailureReason, progress);
     }
 
     private static async Task<Results<Ok<PagedResponse<JobSummary>>, ValidationProblem>> ListJobs(
         CrawlerDbContext db,
         CancellationToken ct,
         int page = 1,
-        int pageSize = DefaultPageSize)
+        int pageSize = DefaultPageSize,
+        string? search = null)
     {
         // Upper bounds also keep (page - 1) * pageSize from overflowing.
         if (page is < 1 or > MaxPage || pageSize is < 1 or > MaxPageSize)
@@ -153,10 +224,17 @@ public static class JobEndpoints
             });
         }
 
-        var totalCount = await db.Jobs.CountAsync(ct);
+        // Case-insensitive "URL contains"; fine for history sizes, a trigram index would scale it further.
+        var jobs = db.Jobs.AsNoTracking();
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            jobs = jobs.Where(j => EF.Functions.ILike(j.Url, $"%{search.Trim()}%"));
+        }
+
+        var totalCount = await jobs.CountAsync(ct);
 
         // Served by the created_at DESC index.
-        var items = await db.Jobs.AsNoTracking()
+        var items = await jobs
             .OrderByDescending(j => j.CreatedAt)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)

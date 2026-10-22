@@ -1,6 +1,6 @@
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { Card, Table, Typography } from 'antd';
+import { Card, Input, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { api, formatDate, formatDuration, isLinkClick, pollWhileAnyActive, type JobSummary } from '../api';
 import { StatusBadge } from '../components/StatusBadge';
@@ -20,10 +20,11 @@ export function HistoryPage() {
   // The page lives in the URL (?page=3) so Back from a job returns to it.
   const [searchParams, setSearchParams] = useSearchParams();
   const page = Math.max(1, Number(searchParams.get('page')) || 1);
+  const search = searchParams.get('q') ?? '';
 
   const jobs = useQuery({
-    queryKey: ['jobs', page],
-    queryFn: () => api.listJobs(page, PAGE_SIZE),
+    queryKey: ['jobs', page, search],
+    queryFn: () => api.listJobs(page, PAGE_SIZE, search),
     placeholderData: keepPreviousData,
     refetchInterval: (query) => pollWhileAnyActive(query.state.data?.items),
   });
@@ -33,13 +34,24 @@ export function HistoryPage() {
   }
 
   return (
-    <Card title="Crawl history">
+    <Card
+      title="Crawl history"
+      extra={
+        <Input.Search
+          placeholder="Search URLs, e.g. books.toscrape"
+          allowClear
+          defaultValue={search}
+          onSearch={(value) => setSearchParams(value.trim() ? { q: value.trim() } : {})}
+          style={{ width: 280 }}
+        />
+      }
+    >
       <Table<JobSummary>
         rowKey="jobId"
         columns={columns}
         dataSource={jobs.data?.items ?? []}
         loading={jobs.isPending}
-        locale={{ emptyText: 'No crawls yet.' }}
+        locale={{ emptyText: search ? `No crawls match "${search}".` : 'No crawls yet.' }}
         rowClassName="clickable"
         onRow={(job) => ({ onClick: (event) => !isLinkClick(event) && navigate(`/jobs/${job.jobId}`) })}
         pagination={{
@@ -47,7 +59,7 @@ export function HistoryPage() {
           pageSize: PAGE_SIZE,
           showSizeChanger: false,
           total: jobs.data?.totalCount ?? 0,
-          onChange: (next) => setSearchParams({ page: String(next) }),
+          onChange: (next) => setSearchParams({ page: String(next), ...(search && { q: search }) }),
           showTotal: (total) => `${total} jobs`,
         }}
       />

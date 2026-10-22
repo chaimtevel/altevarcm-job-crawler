@@ -11,6 +11,9 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
 {
     public const string CanceledReason = "Job canceled";
 
+    /// <summary>Postgres NOTIFY channel; payload is the job id. The API listens and pushes SSE updates.</summary>
+    public const string ProgressChannel = "job_progress";
+
     public Task<CrawlJob?> GetJobAsync(Guid jobId, CancellationToken ct) =>
         db.Jobs.AsNoTracking().FirstOrDefaultAsync(j => j.Id == jobId, ct);
 
@@ -63,14 +66,28 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
     }
 
     /// <summary>Pending → Running; no-op if already started.</summary>
-    public Task MarkJobRunningAsync(Guid jobId, CancellationToken ct)
+    public async Task MarkJobRunningAsync(Guid jobId, CancellationToken ct)
     {
         var now = clock.GetUtcNow();
-        return db.Jobs
+        var started = await db.Jobs
             .Where(j => j.Id == jobId && j.Status == CrawlJobStatus.Pending)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(j => j.Status, CrawlJobStatus.Running)
                 .SetProperty(j => j.StartedAt, now), ct);
+
+        if (started == 1)
+        {
+            await NotifyProgressAsync([jobId], ct);
+        }
+    }
+
+    /// <summary>Inside a transaction Postgres delivers this on commit, so listeners never see uncommitted state.</summary>
+    private async Task NotifyProgressAsync(IEnumerable<Guid> jobIds, CancellationToken ct)
+    {
+        foreach (var jobId in jobIds)
+        {
+            await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_notify({ProgressChannel}, {jobId.ToString()})", ct);
+        }
     }
 
     /// <summary>
@@ -139,6 +156,7 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
                 await CompleteJobIfDoneAsync(job.Id, now, ct);
             }
 
+            await NotifyProgressAsync([job.Id], ct);
             await tx.CommitAsync(ct);
             return (IReadOnlyList<QueuedPage>?)queued;
         });
@@ -175,6 +193,7 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
                     .SetProperty(j => j.Status, CrawlJobStatus.Canceled)
                     .SetProperty(j => j.CompletedAt, now), ct);
 
+            await NotifyProgressAsync([jobId], ct);
             await tx.CommitAsync(ct);
             return CancelJobResult.Canceled;
         });
@@ -213,6 +232,7 @@ public class CrawlStore(CrawlerDbContext db, TimeProvider clock)
                     .SetProperty(j => j.FailureReason, reason)
                     .SetProperty(j => j.CompletedAt, now), ct);
 
+            await NotifyProgressAsync(expiredJobIds, ct);
             await tx.CommitAsync(ct);
             return timedOut;
         });

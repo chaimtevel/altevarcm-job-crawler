@@ -1,9 +1,10 @@
+using System.Text.RegularExpressions;
 using Crawler.Domain.Crawling;
 using Crawler.Domain.Jobs;
 
 namespace Crawler.Api.Jobs;
 
-public static class CreateJobValidator
+public static partial class CreateJobValidator
 {
     /// <summary>Validates the request and returns the normalized start URL, or the validation errors.</summary>
     public static (Uri? StartUrl, Dictionary<string, string[]> Errors) Validate(CreateJobRequest request)
@@ -35,7 +36,11 @@ public static class CreateJobValidator
         return (errors.Count == 0 ? startUrl : null, errors);
     }
 
-    /// <summary>"example.com/path" becomes https://…; anything with a scheme or a leading slash is left alone.</summary>
+    /// <summary>"example.com" or "example.com:8080/docs" get https://; a scheme ("mailto:") or leading slash doesn't.</summary>
     private static string WithDefaultScheme(string url) =>
-        url.Contains(':') || url.StartsWith('/') ? url : $"https://{url}";
+        HasScheme().IsMatch(url) || url.StartsWith('/') ? url : $"https://{url}";
+
+    // A scheme is letters then ":" not followed by a digit, so "host:8080" counts as a port.
+    [GeneratedRegex(@"^[a-zA-Z][a-zA-Z0-9+.-]*:(?!\d)")]
+    private static partial Regex HasScheme();
 }

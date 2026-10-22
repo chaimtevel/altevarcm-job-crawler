@@ -14,7 +14,9 @@ public static class PublicNetworkConnector
         var allowed = addresses.Where(NetworkAddress.IsPublic).ToArray();
 
         if (allowed.Length == 0)
+        {
             throw new HttpRequestException($"Blocked: {host} resolves only to private or reserved addresses.");
+        }
 
         var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
         try

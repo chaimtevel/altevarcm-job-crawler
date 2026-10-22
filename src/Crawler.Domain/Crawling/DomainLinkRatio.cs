@@ -9,7 +9,9 @@ public static class DomainLinkRatio
     public static double Calculate(IReadOnlyCollection<Uri> outgoingLinks, string startingHost)
     {
         if (outgoingLinks.Count == 0)
+        {
             return 0;
+        }
 
         var internalCount = outgoingLinks.Count(link => IsWithinDomain(link.Host, startingHost));
         return (double)internalCount / outgoingLinks.Count;

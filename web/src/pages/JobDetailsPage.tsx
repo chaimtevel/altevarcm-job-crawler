@@ -1,7 +1,8 @@
+import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Card, Col, Popconfirm, Progress, Result, Row, Space, Statistic, Typography } from 'antd';
-import { api, ApiError, formatDate, formatDuration, isActive, type JobStatus } from '../api';
+import { api, ApiError, formatDate, formatDuration, isActive, type JobDetails, type JobStatus } from '../api';
 import { StatusBadge } from '../components/StatusBadge';
 import { ErrorMessage, Loading } from '../components/States';
 import { PageTree } from '../components/PageTree';
@@ -11,14 +12,16 @@ const POLL_INTERVAL_MS = 2000;
 export function JobDetailsPage() {
   const { jobId = '' } = useParams();
 
+  const queryClient = useQueryClient();
+  const live = useJobEvents(jobId);
+
   const job = useQuery({
     queryKey: ['job', jobId],
     queryFn: () => api.getJob(jobId),
-    // Poll while the job runs; stop once it reaches a final status.
-    refetchInterval: (query) => (isActive(query.state.data?.status) ? POLL_INTERVAL_MS : false),
+    // Live updates arrive over SSE; poll only while the stream is down and the job still runs.
+    refetchInterval: (query) => (!live && isActive(query.state.data?.status) ? POLL_INTERVAL_MS : false),
   });
 
-  const queryClient = useQueryClient();
   const cancelJob = useMutation({
     // 409 = the job finished on its own just before the click; the refresh below shows its final status.
     mutationFn: () => api.cancelJob(jobId).catch((error) => {
@@ -107,8 +110,10 @@ export function JobDetailsPage() {
         {/* Cancel skips all pending pages, so a percentage would read 100%; the text says what happened. */}
         {!canceled && <Progress percent={running ? percent : 100} status={progressStatus(data.status)} />}
         <Typography.Text type="secondary">
-          {running
-            ? `Crawling… ${done} of ${toFetch} pages fetched (limit ${data.maxPages}, updates every ${POLL_INTERVAL_MS / 1000}s)`
+          {data.status === 'Pending'
+            ? 'Queued, waiting for a worker to pick up the start page…'
+            : running
+            ? `Crawling… ${done} of ${toFetch} pages fetched (limit ${data.maxPages}, ${live ? 'live' : `updates every ${POLL_INTERVAL_MS / 1000}s`})`
             : canceled
               ? `Canceled after ${done} pages fetched · ${progress.discovered} URLs recorded`
               : `${progress.crawled} pages crawled · ${progress.discovered} URLs recorded`}
@@ -130,6 +135,33 @@ export function JobDetailsPage() {
       )}
     </Space>
   );
+}
+
+/**
+ * Subscribes to the job's Server-Sent Events and writes each update into the query cache.
+ * Returns whether the stream is connected; the browser reconnects on its own after errors.
+ */
+function useJobEvents(jobId: string) {
+  const queryClient = useQueryClient();
+  const [live, setLive] = useState(false);
+
+  useEffect(() => {
+    const events = new EventSource(`/api/jobs/${jobId}/events`);
+    events.onopen = () => setLive(true);
+    events.onerror = () => setLive(false);
+    events.onmessage = (message) => {
+      const job = JSON.parse(message.data) as JobDetails;
+      queryClient.setQueryData(['job', jobId], job);
+      if (!isActive(job.status)) {
+        // The server ends the stream for finished jobs; close so the browser doesn't reconnect.
+        events.close();
+        setLive(false);
+      }
+    };
+    return () => events.close();
+  }, [jobId, queryClient]);
+
+  return live;
 }
 
 function progressStatus(status: JobStatus) {

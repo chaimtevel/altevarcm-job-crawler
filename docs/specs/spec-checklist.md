@@ -66,7 +66,8 @@ How each requirement in `Technical Assessment.pdf` is met. Details are in the ro
 |---|---|
 | Start Crawl: URL, optional maxDepth, navigate | `StartCrawlPage` has URL and depth inputs; on submit it creates the job and opens Job Details. |
 | Job Details: status and timestamps | `JobDetailsPage` header shows the status badge, created/started/completed times, duration and failure reason. |
-| Progress indicator (polling OK) | TanStack Query polls every 2 s while active; statistic cards and a progress bar show page counts. |
+| Progress indicator (polling OK) | Statistic cards and a progress bar show page counts, updated live over SSE, polling as fallback. |
+| SSE/SignalR (stretch) | `GET /api/jobs/{id}/events` streams job updates; worker Postgres `NOTIFY` triggers each push. |
 | Tree view once completed | `PageTree` shows an expandable tree with status, HTTP code, ratio and links per page. |
 | History: list jobs, click to open | `HistoryPage` is a server-paginated table of jobs; clicking a row opens its Job Details page. |
 | Clear loading and error states | Shared `States` components show spinners and error alerts; API errors show their problem-details message. |

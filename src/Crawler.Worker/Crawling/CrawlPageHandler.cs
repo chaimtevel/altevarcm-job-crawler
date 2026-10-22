@@ -140,6 +140,8 @@ public class CrawlPageHandler(
             .Where(url => DomainLinkRatio.IsWithinDomain(url.Host, startHost))
             .Select(url => Classify(url, startHost, page.Depth + 1, job.MaxDepth))
             .Where(link => link.Status == CrawlPageStatus.Pending && known.Add(link.Url))
+            // At most half the page limit, so a large sitemap can't crowd out deeper link-following.
+            .Take(job.MaxPages / 2)
             .ToList();
     }
 

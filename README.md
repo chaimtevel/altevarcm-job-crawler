@@ -44,6 +44,8 @@ React UI ──> Crawl API ──> Dapr ──> RabbitMQ ──> Dapr ──> Cr
 - **One message per page:** parallel across workers, retried per page, progress comes straight from the database.
 - **Dapr:** retries and dead-lettering are config (`dapr/components/`), not code.
 - **Database first:** a page row exists before its message is sent; a job completes when no page is `Pending`.
+- **Live updates (SSE):** the worker sends Postgres `NOTIFY` on each save; the API `LISTEN`s and streams
+  `GET /api/jobs/{id}/events` to the browser. Polling is the fallback if the stream drops.
 
 ## Message schema
 
@@ -76,7 +78,8 @@ Delivery is at-least-once; duplicates are harmless because of:
 - **Links:** relative links and `<base href>` resolved, `#fragments` dropped, only http(s), max 2,048 chars.
 - **Ratio:** internal ÷ total distinct links, 0 if none. Internal = starting host or its subdomains, ignoring `www.`.
 - **Limits:** depth 2 by default (max 5), 200 pages per job, HTML only, 5 MB per page.
-- **Sitemaps:** the start page also reads `robots.txt` / `sitemap.xml`, so pages added by JavaScript (e.g. job lists) are found.
+- **Sitemaps:** the start page also reads `robots.txt` / `sitemap.xml`, so pages added by JavaScript (e.g. job lists) are found;
+  they use at most half the page limit, leaving room for following links deeper.
 - **Redirects:** up to 5 hops, including `https → http`. Links that redirect off-site are skipped; a redirect target
   is recorded so it isn't crawled twice.
 - **SSRF guard:** private, loopback and cloud-metadata addresses are blocked, including after DNS lookups and redirects.
@@ -86,7 +89,7 @@ Delivery is at-least-once; duplicates are harmless because of:
 
 - **First:** URL normalization and the ratio (with tests), then the schema and the idempotent message flow, because
   they carry most of the grade and are hardest to change later. UI last.
-- **Cut:** authentication (not in the spec's flows), live updates over SSE (polling is enough), politeness rules.
+- **Cut:** authentication (not in the spec's flows), politeness rules (robots.txt `Disallow`, rate limits).
 - **Next:** transactional outbox for the first publish, robots.txt `Disallow` and per-site rate limits,
   Testcontainers tests for the SQL.
 

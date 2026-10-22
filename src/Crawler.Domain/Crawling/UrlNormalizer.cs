@@ -23,18 +23,26 @@ public static class UrlNormalizer
         normalized = null!;
 
         if (string.IsNullOrWhiteSpace(href))
+        {
             return false;
+        }
 
         if (!Uri.TryCreate(pageUrl, href.Trim(), out var resolved))
+        {
             return false;
+        }
 
         if (!IsHttp(resolved))
+        {
             return false;
+        }
 
         // HttpRequestUrl = scheme + host + non-default port + path + query (no fragment, no user info).
         var canonical = resolved.GetComponents(UriComponents.HttpRequestUrl, UriFormat.UriEscaped);
         if (canonical.Length > MaxLength)
+        {
             return false;
+        }
 
         normalized = new Uri(canonical);
         return true;

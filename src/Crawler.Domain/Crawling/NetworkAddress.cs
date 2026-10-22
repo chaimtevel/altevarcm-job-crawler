@@ -9,10 +9,14 @@ public static class NetworkAddress
     public static bool IsPublic(IPAddress address)
     {
         if (address.IsIPv4MappedToIPv6)
+        {
             address = address.MapToIPv4();
+        }
 
         if (IPAddress.IsLoopback(address) || address.Equals(IPAddress.Any) || address.Equals(IPAddress.IPv6Any))
+        {
             return false;
+        }
 
         return address.AddressFamily switch
         {
@@ -27,7 +31,9 @@ public static class NetworkAddress
     {
         if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
             || host.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase))
+        {
             return true;
+        }
 
         return IPAddress.TryParse(host.Trim('[', ']'), out var ip) && !IsPublic(ip);
     }

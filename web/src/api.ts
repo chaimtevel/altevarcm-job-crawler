@@ -6,7 +6,7 @@ export const MAX_DEPTH = 5;
 export const DEFAULT_MAX_DEPTH = 2;
 export const MAX_PAGES = 200;
 
-export type JobStatus ='Pending' | 'Running' | 'Completed' | 'Failed' | 'Canceled';
+export type JobStatus = 'Pending' | 'Running' | 'Completed' | 'Failed' | 'Canceled';
 export type PageStatus = 'Pending' | 'Crawled' | 'Failed' | 'Skipped';
 
 export interface JobProgress {
@@ -106,8 +106,8 @@ export const api = {
   cancelJob: (jobId: string) => request<void>(`/jobs/${jobId}/cancel`, { method: 'POST' }),
   getTree: (jobId: string) => request<JobTree>(`/jobs/${jobId}/tree`),
   getPageLinks: (jobId: string, pageId: number) => request<PageLink[]>(`/jobs/${jobId}/pages/${pageId}/links`),
-  listJobs: (page: number, pageSize: number) =>
-    request<PagedResponse<JobSummary>>(`/jobs?page=${page}&pageSize=${pageSize}`),
+  listJobs: (page: number, pageSize: number, search = '') =>
+    request<PagedResponse<JobSummary>>(`/jobs?page=${page}&pageSize=${pageSize}&search=${encodeURIComponent(search)}`),
 };
 
 export const isActive = (status: JobStatus | undefined) => status === 'Pending' || status === 'Running';

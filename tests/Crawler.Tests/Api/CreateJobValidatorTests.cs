@@ -9,6 +9,7 @@ public class CreateJobValidatorTests
     [InlineData("  HTTP://Example.com/path#frag  ", "http://example.com/path")]
     [InlineData("example.com", "https://example.com/")]
     [InlineData("www.example.com/docs", "https://www.example.com/docs")]
+    [InlineData("example.com:8080/docs", "https://example.com:8080/docs")]
     public void Accepts_and_normalizes_http_urls(string url, string expected)
     {
         var (startUrl, errors) = CreateJobValidator.Validate(new CreateJobRequest(url, null));

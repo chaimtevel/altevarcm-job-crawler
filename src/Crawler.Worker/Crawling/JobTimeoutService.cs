@@ -17,7 +17,9 @@ public class JobTimeoutService(IServiceScopeFactory scopes, ILogger<JobTimeoutSe
                 await using var scope = scopes.CreateAsyncScope();
                 var timedOut = await scope.ServiceProvider.GetRequiredService<CrawlStore>().TimeOutExpiredJobsAsync(stoppingToken);
                 if (timedOut > 0)
+                {
                     logger.LogWarning("Timed out {Count} job(s) past their deadline", timedOut);
+                }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
